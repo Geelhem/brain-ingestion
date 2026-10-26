@@ -1,0 +1,255 @@
+sources:
+- name: ladies-college-local
+  path: /path/to/teaching-resources
+  enabled: true
+  delay_ms: 20
+  include_globs:
+  - '**/*.docx'
+  - '**/*.doc'
+  - '**/*.pptx'
+  - '**/*.ppt'
+  - '**/*.pdf'
+  - '**/*.xlsx'
+  - '**/*.msg'
+  - '**/*.txt'
+  - '**/*.md'
+  exclude_globs:
+  - '**/~$*'
+  - '**/.~*'
+  - '**/node_modules/**'
+  doc_type_hint: resource
+- name: onedrive-nae
+  path: /path/to/onedrive-school
+  enabled: true
+  include_globs:
+  - '**/*.docx'
+  - '**/*.doc'
+  - '**/*.pptx'
+  - '**/*.ppt'
+  - '**/*.pdf'
+  - '**/*.xlsx'
+  - '**/*.msg'
+  - '**/*.txt'
+  - '**/*.md'
+  exclude_globs:
+  - '**/~$*'
+  - '**/.~*'
+  - '**/node_modules/**'
+  doc_type_hint: resource
+- name: onedrive-ladies-college
+  path: /path/to/onedrive-ladies-college
+  enabled: true
+  include_globs:
+  - '**/*.docx'
+  - '**/*.pptx'
+  - '**/*.pdf'
+  - '**/*.txt'
+  - '**/*.md'
+  exclude_globs:
+  - '**/~$*'
+  doc_type_hint: resource
+- name: onedrive-grammar-school
+  path: /path/to/onedrive-school/Grammar School Drive
+  enabled: true
+  include_globs:
+  - '**/*.docx'
+  - '**/*.pptx'
+  - '**/*.pdf'
+  - '**/*.txt'
+  - '**/*.md'
+  exclude_globs:
+  - '**/~$*'
+  doc_type_hint: resource
+- name: obsidian-education-gch
+  path: /path/to/obsidian-vault/04 - Permanent/Education GCH
+  enabled: true
+  include_globs:
+  - '**/*.md'
+  - '**/*.pdf'
+  - '**/*.docx'
+  exclude_globs: []
+  doc_type_hint: knowledge
+- name: obsidian-ib-exams
+  path: /path/to/obsidian-vault/04 - Permanent/IB Examinations
+  enabled: true
+  include_globs:
+  - '**/*.md'
+  - '**/*.pdf'
+  - '**/*.docx'
+  exclude_globs: []
+  doc_type_hint: assessment
+- name: obsidian-teaching
+  path: /path/to/obsidian-vault/04 - Permanent/Teaching
+  enabled: true
+  include_globs:
+  - '**/*.md'
+  - '**/*.pdf'
+  - '**/*.docx'
+  exclude_globs: []
+  doc_type_hint: resource
+- name: obsidian-primary-sources
+  path: /path/to/obsidian-vault/03 - Sources/Primary Sources
+  enabled: true
+  include_globs:
+  - '**/*.md'
+  - '**/*.pdf'
+  - '**/*.docx'
+  exclude_globs: []
+  doc_type_hint: knowledge
+- name: onenote-mfl-staff
+  path: /path/to/output-vault/OneNote Exports
+  enabled: true
+  include_globs:
+  - '**/*.onepkg'
+  - '**/*.pdf'
+  exclude_globs: []
+  doc_type_hint: admin
+vault_path: /path/to/output-vault/AI_Work-Vault
+state_db: /path/to/output-vault/.ingest-state/manifest.db
+index_db: /path/to/output-vault/.ingest-state/index.db
+log_dir: /path/to/output-vault/.ingest-state/logs
+anonymiser:
+  preference:
+  - apple_pcc
+  - apple_device
+  - ollama
+  ollama_model: qwen2.5:14b
+  chunk_chars: 1200
+  chunk_overlap: 150
+embeddings:
+  ollama_model: paraphrase-multilingual
+  dimensions: 768
+synthesis:
+  ollama_model: gemma4:12b-mxfp8
+  max_summary_chars: 1200
+ocr:
+  enabled: true
+  engine: tesseract
+  languages:
+  - eng
+  - fra
+  - spa
+  only_if_no_text: true
+  min_text_length: 100
+document_type_routing:
+  student_work:
+    path_keywords:
+    - student
+    - Student
+    - exemplars
+    - Exemplars
+    - student work
+    - class work
+    - Class Work
+    anonymise_mode: names_only
+    synthesize: error_taxonomy
+    index_namespace: student_work
+    output_folder: 30-Student-Work
+  report:
+    path_keywords:
+    - report
+    - Report
+    - reports
+    - Reports
+    - school report
+    anonymise_mode: names_only
+    synthesize: voice_profile
+    index_namespace: reports
+    output_folder: 40-Reports
+  scheme:
+    path_keywords:
+    - scheme
+    - Scheme
+    - unit plan
+    - Unit Plan
+    - SOW
+    - sow
+    - curriculum
+    - Curriculum
+    anonymise_mode: none
+    synthesize: standards_map
+    index_namespace: schemes
+    output_folder: 20-Synthesis/unit-plans
+  assessment:
+    path_keywords:
+    - exam
+    - Exam
+    - assessment
+    - Assessment
+    - markscheme
+    - Markscheme
+    - rubric
+    - Rubric
+    - past paper
+    anonymise_mode: names_in_exemplars
+    synthesize: criteria_map
+    index_namespace: assessments
+    output_folder: 20-Synthesis/assessment-blueprints
+  cpd:
+    path_keywords:
+    - cpd
+    - CPD
+    - training
+    - Training
+    - workshop
+    - Workshop
+    - inset
+    - INSET
+    anonymise_mode: none
+    synthesize: takeaways
+    index_namespace: cpd
+    output_folder: 60-CPD
+  knowledge:
+    path_keywords:
+    - primary
+    - Primary
+    - zettelkasten
+    - literature
+    - permanent
+    - Permanent
+    anonymise_mode: none
+    synthesize: atomic_notes
+    index_namespace: knowledge
+    output_folder: 10-Resources/by-theme
+  admin:
+    path_keywords:
+    - admin
+    - Admin
+    - policy
+    - Policy
+    - handbook
+    - Handbook
+    - meeting
+    - Meeting
+    - handover
+    - Handover
+    - appraisal
+    - Appraisal
+    - claims
+    - Claims
+    anonymise_mode: names
+    synthesize: standard
+    index_namespace: admin
+    output_folder: 50-Admin
+  resource:
+    path_keywords:
+    - lesson
+    - Lesson
+    - resource
+    - Resource
+    - worksheet
+    - Worksheet
+    - sentence builder
+    - activity
+    - Activity
+    anonymise_mode: none
+    synthesize: standard
+    index_namespace: resources
+    output_folder: 10-Resources
+monitor:
+  status_file: 90-System/STATUS.md
+  update_every_files: 25
+crawl:
+  delay_ms: 300
+  extract_attempts: 3
+tag_taxonomy_path: 90-System/tag-taxonomy.yaml
