@@ -154,25 +154,43 @@ def summarise_source(manifest: Manifest, file_path: str, cfg, doc_type: str = "r
         try:
             data = json.loads(out)
             if doc_type == "student_work":
-                summary = f"Error taxonomy extracted: {len(data.get('errors', []))} errors categorized."
+                errors = data.get("errors", [])
+                if not errors:
+                    return None  # no real errors — write nothing, not a stub
+                summary = f"Error taxonomy: {len(errors)} errors categorized."
                 tags = ["#error-taxonomy", "#student-work"]
             elif doc_type == "report":
-                summary = f"Voice profile: {len(data.get('voice_patterns', []))} patterns extracted."
+                patterns = data.get("voice_patterns", [])
+                if not patterns:
+                    return None  # no real voice patterns — write nothing, not a stub
+                summary = f"Voice profile: {len(patterns)} patterns extracted."
                 tags = ["#voice-profile", "#reports"]
             elif doc_type == "scheme":
+                if not data.get("programme") and not data.get("theme"):
+                    return None
                 summary = f"Scheme mapped to standards: {data.get('programme', '')} {data.get('language', '')} {data.get('year', '')}."
                 tags = [f"#programme/{data.get('programme','').lower()}", f"#language/{data.get('language','').lower()}"]
             elif doc_type == "assessment":
+                if not data.get("criteria"):
+                    return None
                 summary = f"Assessment criteria mapped: {data.get('programme','')} {data.get('paper','')}."
                 tags = [f"#assessment/{data.get('paper','').lower().replace(' ', '-')}"]
             elif doc_type == "cpd":
-                summary = f"CPD takeaways: {len(data.get('takeaways', []))} concepts."
+                takeaways = data.get("takeaways", [])
+                if not takeaways:
+                    return None
+                summary = f"CPD takeaways: {len(takeaways)} concepts."
                 tags = ["#cpd"]
             elif doc_type == "knowledge":
-                summary = f"Knowledge note: {', '.join(data.get('key_ideas', [])[:3])}."
+                ideas = data.get("key_ideas", [])
+                if not ideas:
+                    return None
+                summary = f"Knowledge note: {', '.join(ideas[:3])}."
                 tags = ["#knowledge"]
             else:
                 summary = data.get("summary", "Admin document processed.")
+                if not summary or summary == "Admin document processed.":
+                    return None
                 tags = ["#admin"]
             return summary, ["#" + t for t in tags]
         except Exception:
@@ -198,6 +216,8 @@ def summarise_source(manifest: Manifest, file_path: str, cfg, doc_type: str = "r
 
 def write_synthesis_note(manifest: Manifest, file_path: str, summary: str,
                          tags: list[str], cfg, output_folder: str = "20-Synthesis") -> Path | None:
+    if not summary:
+        return None  # no real content — write nothing, not a stub
     vault = cfg.vault_path
     row = manifest.get(file_path)
     src_note = row["note_path"] if row and row["note_path"] else None
@@ -216,29 +236,37 @@ def write_synthesis_note(manifest: Manifest, file_path: str, summary: str,
     return target
 
 
+CURATED_MOCS = {
+    "german": "# Map of Content: German\n\nGerman teaching resources, schemes, and assessment materials. Links to notes appear here as they are ingested.\n\n#moc #german #language/german",
+    "french": "# Map of Content: French\n\nFrench teaching resources, schemes, and assessment materials. Links to notes appear here as they are ingested.\n\n#moc #french #language/french",
+    "spanish": "# Map of Content: Spanish\n\nSpanish teaching resources, schemes, and assessment materials. Links to notes appear here as they are ingested.\n\n#moc #spanish #language/spanish",
+    "assessment": "# Map of Content: Assessment\n\nAssessment criteria, mark schemes, and rubrics for IB/IGCSE/GCSE French and Spanish.\n\n#moc #assessment",
+    "scheme-of-work": "# Map of Content: Schemes of Work\n\nUnit plans and schemes of work across KS3, KS4, KS5, IB-DP.\n\n#moc #scheme-of-work",
+    "grammar": "# Map of Content: Grammar\n\nGrammar points, explanations, and practice materials for French and Spanish.\n\n#moc #grammar",
+    "cpd": "# Map of Content: CPD\n\nContinuing professional development notes, training takeaways, and reflections.\n\n#moc #cpd",
+    "student-work": "# Map of Content: Student Work\n\nAnonymised student work samples with error taxonomies.\n\n#moc #student-work",
+    "error-taxonomy": "# Map of Content: Error Taxonomy\n\nCategorised language errors from anonymised student work: grammar, vocabulary, syntax, register, cohesion, pronunciation, spelling.\n\n#moc #error-taxonomy",
+    "voice-profile": "# Map of Content: Voice Profile\n\nReusable report comment patterns extracted from the teacher's own reports.\n\n#moc #voice-profile #reports",
+}
+
+
 def build_mocs(cfg, manifest: Manifest) -> list[Path]:
+    """Create only the 10 curated MOCs as honest gap notes. No auto-tag generation."""
     vault = cfg.vault_path
-    tag_index: dict[str, list[str]] = {}
-    for folder in ["20-Synthesis", "10-Resources", "30-Student-Work", "40-Reports", "60-CPD"]:
-        for f in (vault / folder).glob("*.md"):
-            head = f.read_text(encoding="utf-8", errors="replace")[:1200]
-            for tag in re.findall(r"#([\w-]+)", head):
-                tag_index.setdefault(tag, []).append(f.stem)
-    mocs: list[Path] = []
-    for tag, notes in sorted(tag_index.items()):
-        if len(notes) < 3:
-            continue
-        moc = vault / "20-Synthesis" / f"MOC--{tag}.md"
-        lines = [f"# Map of Content: {tag}", ""]
-        lines += [f"- [[{n}]]" for n in sorted(notes)]
-        lines += ["", f"#moc #{tag}"]
-        moc.write_text("\n".join(lines), encoding="utf-8")
-        mocs.append(moc)
-    return mocs
+    synth_dir = vault / "20-Synthesis"
+    synth_dir.mkdir(parents=True, exist_ok=True)
+    created: list[Path] = []
+    for tag, body in CURATED_MOCS.items():
+        moc = synth_dir / f"MOC--{tag}.md"
+        if not moc.exists():
+            moc.write_text(body + "\n", encoding="utf-8")
+            created.append(moc)
+    return created
 
 
 def build_voice_profile_moc(cfg, manifest: Manifest) -> Path | None:
-    """Build a dedicated MOC for voice profile / report templates."""
+    """Build a dedicated MOC for voice profile / report templates.
+    Only writes if there are real comment patterns — never a stub."""
     vault = cfg.vault_path
     voice_dir = vault / "40-Reports" / "templates"
     voice_dir.mkdir(parents=True, exist_ok=True)
@@ -251,10 +279,17 @@ def build_voice_profile_moc(cfg, manifest: Manifest) -> Path | None:
     ).fetchall()
 
     if not patterns:
-        return None
+        return None  # no real patterns — write nothing, not a stub
+
+    # Filter out stubs: skip chunks that are just "N patterns extracted" placeholders
+    real_patterns = [p for p in patterns if len(p["text"].strip()) > 50
+                     and "patterns extracted" not in p["text"].lower()]
+
+    if not real_patterns:
+        return None  # only stubs found — write nothing
 
     lines = ["# Voice Profile & Report Templates", "", "## Extracted Comment Patterns", ""]
-    for i, p in enumerate(patterns[:50], 1):
+    for i, p in enumerate(real_patterns[:50], 1):
         lines.append(f"{i}. {p['text'][:200]}")
     lines += ["", "## Usage", "Copy and adapt these phrases for new reports."]
 
@@ -264,14 +299,25 @@ def build_voice_profile_moc(cfg, manifest: Manifest) -> Path | None:
 
 
 def build_error_taxonomy_moc(cfg, manifest: Manifest) -> Path | None:
-    """Build MOC for student error taxonomy."""
+    """Build MOC for student error taxonomy.
+    Only writes if there are real anonymised student work chunks — never a stub."""
     vault = cfg.vault_path
     error_dir = vault / "30-Student-Work" / "error-taxonomy"
     error_dir.mkdir(parents=True, exist_ok=True)
 
-    # This would be populated by the error_taxonomy synthesis
+    # Check for real anonymised student work chunks
+    count = manifest.conn.execute(
+        "SELECT COUNT(*) FROM chunks c "
+        "JOIN files f ON c.file_path = f.path "
+        "WHERE c.status='anonymised' AND f.doc_type='student_work'"
+    ).fetchone()[0]
+
+    if count == 0:
+        return None  # no real student work — write nothing, not a stub
+
     lines = ["# Student Error Taxonomy", "", "Generated from anonymized student work.", ""]
     lines += ["Categories: Grammar, Vocabulary, Syntax, Register, Cohesion, Pronunciation, Spelling", ""]
+    lines += [f"Student work chunks indexed: {count}", ""]
 
     moc = error_dir / "error-taxonomy-index.md"
     moc.write_text("\n".join(lines), encoding="utf-8")

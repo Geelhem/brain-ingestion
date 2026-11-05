@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,7 @@ from .manifest import Manifest
 
 CHUNK_CHARS = 1200
 CHUNK_OVERLAP = 150
+MIN_TEXT_WORDS = 80  # documents under this many words are extraction_failed, not extracted
 
 
 def sha256_file(path: Path, bufsize: int = 1024 * 1024) -> str:
@@ -28,8 +30,23 @@ def sha256_file(path: Path, bufsize: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
+def dedupe_sentences(text: str) -> str:
+    """Remove repeated paragraphs (blank-line separated blocks) while preserving order.
+    Fixes the 19% of notes that contain repeated paragraphs without affecting
+    single-paragraph text used for chunk-boundary tests."""
+    paragraphs = re.split(r'\n\s*\n', text.strip())
+    seen: set[str] = set()
+    result: list[str] = []
+    for p in paragraphs:
+        p = p.strip()
+        if p and p not in seen:
+            seen.add(p)
+            result.append(p)
+    return "\n\n".join(result)
+
+
 def chunk_text(text: str, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP) -> list[str]:
-    text = text.strip()
+    text = dedupe_sentences(text.strip())
     if not text:
         return []
     if len(text) <= size:
@@ -168,8 +185,9 @@ def crawl(cfg: Config, manifest: Manifest, only_source: str | None = None,
                         text = _extract_with_retry(fpath, cfg.ocr, attempts=1, quick=True)
                         fhash = sha256_file(fpath)
                         manifest.set_field(str(fpath), "sha256", fhash)
-                        if not text or len(text.strip()) < 40:
-                            manifest.set_status(str(fpath), "extracted")
+                        if not text or len(text.split()) < MIN_TEXT_WORDS:
+                            manifest.set_status(str(fpath), "extraction_failed",
+                                                error=f"too little text ({len(text.split())} words)")
                             continue
                         manifest.add_chunks(str(fpath), chunk_text(text))
                         manifest.set_field(str(fpath), "content_sha256",
@@ -213,8 +231,9 @@ def crawl(cfg: Config, manifest: Manifest, only_source: str | None = None,
                     manifest.set_status(str(fpath), "discovered")
                     text = _extract_with_retry(fpath, cfg.ocr, attempts=cfg.crawl.get("extract_attempts", 3))
                     manifest.set_field(str(fpath), "sha256", sha256_file(fpath))
-                    if not text or len(text.strip()) < 40:
-                        manifest.set_status(str(fpath), "extracted")
+                    if not text or len(text.split()) < MIN_TEXT_WORDS:
+                        manifest.set_status(str(fpath), "extraction_failed",
+                                            error=f"too little text ({len(text.split())} words)")
                         continue
                     old = manifest.conn.execute(
                         "SELECT COUNT(*) FROM chunks WHERE file_path=?", (str(fpath),)

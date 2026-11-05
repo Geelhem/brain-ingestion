@@ -1,6 +1,6 @@
 sources:
-- name: ladies-college-local
-  path: /path/to/teaching-resources
+- name: onedrive-nae
+  path: /path/to/onedrive-school
   enabled: true
   delay_ms: 20
   include_globs:
@@ -17,48 +17,93 @@ sources:
   - '**/~$*'
   - '**/.~*'
   - '**/node_modules/**'
+  - '**/*.mp3'
+  - '**/*.mp4'
+  - '**/*.wav'
+  - '**/*.m4a'
+  - '**/*.aac'
+  - '**/*.jpg'
+  - '**/*.jpeg'
+  - '**/*.png'
+  - '**/*.gif'
+  - '**/*.bmp'
+  - '**/*.tiff'
+  - '**/*.swf'
+  - '**/*.flv'
+  - '**/*.avi'
+  - '**/*.mov'
+  - '**/*.wmv'
+  - '**/*.zip'
+  - '**/*.rar'
+  - '**/*.7z'
   doc_type_hint: resource
-- name: onedrive-nae
-  path: /path/to/onedrive-school
+- name: onedrive-ladies-college
+  path: /path/to/onedrive-ladies-college
   enabled: true
+  delay_ms: 20
   include_globs:
   - '**/*.docx'
   - '**/*.doc'
   - '**/*.pptx'
   - '**/*.ppt'
   - '**/*.pdf'
-  - '**/*.xlsx'
-  - '**/*.msg'
   - '**/*.txt'
   - '**/*.md'
   exclude_globs:
   - '**/~$*'
-  - '**/.~*'
-  - '**/node_modules/**'
-  doc_type_hint: resource
-- name: onedrive-ladies-college
-  path: /path/to/onedrive-ladies-college
-  enabled: true
-  include_globs:
-  - '**/*.docx'
-  - '**/*.pptx'
-  - '**/*.pdf'
-  - '**/*.txt'
-  - '**/*.md'
-  exclude_globs:
-  - '**/~$*'
+  - '**/*.mp3'
+  - '**/*.mp4'
+  - '**/*.wav'
+  - '**/*.m4a'
+  - '**/*.aac'
+  - '**/*.jpg'
+  - '**/*.jpeg'
+  - '**/*.png'
+  - '**/*.gif'
+  - '**/*.bmp'
+  - '**/*.tiff'
+  - '**/*.swf'
+  - '**/*.flv'
+  - '**/*.avi'
+  - '**/*.mov'
+  - '**/*.wmv'
+  - '**/*.zip'
+  - '**/*.rar'
+  - '**/*.7z'
   doc_type_hint: resource
 - name: onedrive-grammar-school
   path: /path/to/onedrive-school/Grammar School Drive
   enabled: true
+  delay_ms: 20
   include_globs:
   - '**/*.docx'
+  - '**/*.doc'
   - '**/*.pptx'
+  - '**/*.ppt'
   - '**/*.pdf'
   - '**/*.txt'
   - '**/*.md'
   exclude_globs:
   - '**/~$*'
+  - '**/*.mp3'
+  - '**/*.mp4'
+  - '**/*.wav'
+  - '**/*.m4a'
+  - '**/*.aac'
+  - '**/*.jpg'
+  - '**/*.jpeg'
+  - '**/*.png'
+  - '**/*.gif'
+  - '**/*.bmp'
+  - '**/*.tiff'
+  - '**/*.swf'
+  - '**/*.flv'
+  - '**/*.avi'
+  - '**/*.mov'
+  - '**/*.wmv'
+  - '**/*.zip'
+  - '**/*.rar'
+  - '**/*.7z'
   doc_type_hint: resource
 - name: obsidian-education-gch
   path: /path/to/obsidian-vault/04 - Permanent/Education GCH
@@ -97,17 +142,17 @@ sources:
   exclude_globs: []
   doc_type_hint: knowledge
 - name: onenote-mfl-staff
-  path: /path/to/output-vault/OneNote Exports
-  enabled: true
+  path: /Volumes/GCH/Second Brain GCH Work /OneNote Exports
+  enabled: false
   include_globs:
   - '**/*.onepkg'
   - '**/*.pdf'
   exclude_globs: []
   doc_type_hint: admin
-vault_path: /path/to/output-vault/AI_Work-Vault
-state_db: /path/to/output-vault/.ingest-state/manifest.db
-index_db: /path/to/output-vault/.ingest-state/index.db
-log_dir: /path/to/output-vault/.ingest-state/logs
+vault_path: /Volumes/GCMC_user_data/path/to/onedrive-school/GCH Obs Pro Vault/Second Brain GCH Work/AI_Work-Vault
+state_db: /Volumes/GCMC_user_data/path/to/onedrive-school/GCH Obs Pro Vault/Second Brain GCH Work/.ingest-state/manifest.db
+index_db: /Volumes/GCMC_user_data/path/to/onedrive-school/GCH Obs Pro Vault/Second Brain GCH Work/.ingest-state/index.db
+log_dir: /Volumes/GCMC_user_data/path/to/onedrive-school/GCH Obs Pro Vault/Second Brain GCH Work/.ingest-state/logs
 anonymiser:
   preference:
   - apple_pcc

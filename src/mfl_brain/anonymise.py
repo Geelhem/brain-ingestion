@@ -128,9 +128,13 @@ def _apply(text: str, items: list[dict[str, str]], manifest,
         if ph is None:
             ph = _placeholder(kind, counter)
             manifest.remember_pii(value, ph, kind)
-        if value in text:
-            text = text.replace(value, ph)
-            replaced += 1
+        # Word-boundary guard: only replace whole-word matches to avoid
+        # in-word corruptions like challen[[MISC-0001]]s or [[MISC-0001]]he ich
+        pattern = re.compile(r"(?<!\w)" + re.escape(value) + r"(?!\w)")
+        new_text, n = pattern.subn(ph, text)
+        if n > 0:
+            text = new_text
+            replaced += n
     return text, replaced
 
 

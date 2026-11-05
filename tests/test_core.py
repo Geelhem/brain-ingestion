@@ -75,7 +75,9 @@ def test_resume_skips_done_files(cfg, manifest):
 
     src = cfg.raw["sources"][0]["path"]
     for i in range(3):
-        Path(src, f"f{i}.txt").write_text("Unique teaching content about French grammar. " * 5)
+        Path(src, f"f{i}.txt").write_text(
+            "Unique teaching content about French grammar and vocabulary. " * 10
+        )
     crawl(cfg, manifest, verbose=False)
     assert manifest.count_by_status()["extracted"] == 3
     # re-crawl: everything skipped
