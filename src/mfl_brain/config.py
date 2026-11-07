@@ -95,7 +95,7 @@ DEFAULT_CONFIG = {
     "log_dir": "/Volumes/GCMC_user_data/Users/Gee/Library/CloudStorage/OneDrive-NordAngliaEducation/GCH Obs Pro Vault/Second Brain GCH Work/.ingest-state/logs",
     "anonymiser": {
         "preference": ["apple_pcc", "apple_device", "ollama"],
-        "ollama_model": "qwen2.5:14b",
+        "ollama_model": "gemma4:12b-mxfp8",
         "chunk_chars": 1200,
         "chunk_overlap": 150,
     },
@@ -104,7 +104,7 @@ DEFAULT_CONFIG = {
         "dimensions": 768,
     },
     "synthesis": {
-        "ollama_model": "qwen2.5:14b",
+        "ollama_model": "gemma4:12b-mxfp8",
         "max_summary_chars": 1200,
     },
     "ocr": {

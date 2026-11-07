@@ -1,12 +1,76 @@
 #!/bin/zsh
 # Long-running ingestion loop — resumable, monitored, designed to run for days.
-# Usage: nohup zsh scripts/run_pipeline.sh >> .ingest-state/pipeline.log 2>&1 &
+# Usage: zsh scripts/run_pipeline.sh
+#        (interactive: asks about additional ingestion points before starting)
 setopt no_unset
 cd "$(dirname "$0")/.."
 export PYTHONUNBUFFERED=1
 PY=.venv/bin/python
 CONFIG=ingest.config.yaml
 
+# ── Interactive: ask about additional ingestion points ──────────────────────
+echo ""
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║          MFL Second Brain — Ingestion Pipeline               ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+echo ""
+echo "Current sources (from $CONFIG):"
+$PY -c "
+import yaml
+with open('$CONFIG') as f:
+    cfg = yaml.safe_load(f)
+for s in cfg.get('sources', []):
+    status = '✓' if s.get('enabled', True) else '✗'
+    print(f'  {status} {s[\"name\"]:30} {s[\"path\"]}')
+" 2>/dev/null
+echo ""
+echo "Output vault: $(grep '^vault_path:' $CONFIG | sed 's/vault_path: //;s/\"//g')"
+echo "Synthesis model: gemma4:12b-mxfp8"
+echo ""
+
+# Ask if user wants to add more ingestion points
+while true; do
+    echo -n "Add another ingestion point? (y/n): "
+    read -r answer
+    case "$answer" in
+        [Yy]*)
+            echo -n "  Path to folder: "
+            read -r new_path
+            if [[ -z "$new_path" ]]; then
+                echo "  (skipped — empty path)"
+                continue
+            fi
+            echo -n "  Source name (default: auto): "
+            read -r new_name
+            echo -n "  Doc type hint [resource/knowledge/report/student_work/scheme/assessment/cpd/admin] (default: resource): "
+            read -r new_type
+            new_type="${new_type:-resource}"
+            echo -n "  Delay ms between files (default: 20): "
+            read -r new_delay
+            new_delay="${new_delay:-20}"
+
+            args=("$new_path")
+            [[ -n "$new_name" ]] && args+=(--name "$new_name")
+            args+=(--doc-type-hint "$new_type" --delay-ms "$new_delay" --crawl)
+            echo "  → Adding source..."
+            $PY -m mfl_brain add-path "${args[@]}" --config "$CONFIG" 2>&1 | tail -3
+            echo ""
+            ;;
+        [Nn]*|"")
+            break
+            ;;
+        *)
+            echo "  Please answer y or n."
+            ;;
+    esac
+done
+
+echo ""
+echo "Starting ingestion pipeline..."
+echo "  Press Ctrl+C to stop. Monitor with: $PY -m mfl_brain monitor"
+echo ""
+
+# ── Main loop ──────────────────────────────────────────────────────────────
 while true; do
   echo "=== cycle start $(date) ==="
 
