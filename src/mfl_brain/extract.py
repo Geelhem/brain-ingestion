@@ -6,7 +6,7 @@ import email
 import email.policy
 from pathlib import Path
 
-from .ocr import extract_with_ocr_fallback, ocr_pdf, needs_ocr
+from .ocr import extract_with_ocr_fallback, ocr_pdf, ocr_image, needs_ocr
 
 MAX_BYTES = 200 * 1024 * 1024
 
@@ -40,6 +40,8 @@ def extract_text(path: Path, ocr_config: dict | None = None) -> str:
         return _legacy_binary(path)
     if suffix == ".onepkg":
         return _onepkg(path)
+    if suffix in (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif"):
+        return _image(path)
     raise ExtractionError(f"unsupported type: {suffix}")
 
 
@@ -83,18 +85,36 @@ def _docx(path: Path) -> str:
 
 def _pptx(path: Path) -> str:
     from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
 
     prs = Presentation(str(path))
     parts: list[str] = []
     for i, slide in enumerate(prs.slides, 1):
         texts: list[str] = []
+        image_texts: list[str] = []
         for shape in slide.shapes:
             if shape.has_text_frame:
                 t = shape.text_frame.text.strip()
                 if t:
                     texts.append(t)
+            if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                try:
+                    image_bytes = shape.image.blob
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                        tf.write(image_bytes)
+                        tmp_path = Path(tf.name)
+                    from .ocr import ocr_image
+                    img_text = ocr_image(tmp_path, languages=["eng", "fra", "spa"])
+                    tmp_path.unlink(missing_ok=True)
+                    if img_text.strip():
+                        image_texts.append(img_text.strip())
+                except Exception:
+                    continue
         if texts:
             parts.append(f"## Slide {i}\n" + "\n".join(texts))
+        if image_texts:
+            parts.append(f"## Slide {i} (image OCR)\n" + "\n".join(image_texts))
     return "\n\n".join(parts)
 
 
@@ -170,3 +190,11 @@ def _onepkg(path: Path) -> str:
     except Exception as e:
         return f"[OneNote package extraction failed: {e}]"
     return "\n\n".join(text_parts) if text_parts else f"[OneNote package: {path.name} - no extractable text]"
+
+
+def _image(path: Path) -> str:
+    """OCR an image file to extract any text it contains."""
+    from .ocr import ocr_image
+    cfg_ocr = None  # will be filled by caller if needed; use defaults here
+    # ocr_image needs languages; default to eng+fra+spa per config
+    return ocr_image(path, languages=["eng", "fra", "spa"])

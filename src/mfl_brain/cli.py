@@ -3,6 +3,7 @@
 Usage:
   .venv/bin/python -m mfl_brain init
   .venv/bin/python -m mfl_brain add-path /path/to/folder [--name NAME] [--crawl]
+  .venv/bin/python -m mfl_brain remove-path --name NAME [--purge]
   .venv/bin/python -m mfl_brain crawl --config ingest.config.yaml [--source NAME] [--limit N]
   .venv/bin/python -m mfl_brain dedup [--near/--exact-only]
   .venv/bin/python -m mfl_brain anonymise [--limit N]
@@ -140,6 +141,60 @@ def cmd_add_path(args) -> int:
     return 0
 
 
+def cmd_remove_path(args) -> int:
+    """Remove a source path from the config (and optionally its manifest rows)."""
+    cfg_path = Path(args.config)
+    if not cfg_path.exists():
+        print(f"error: config not found: {cfg_path}")
+        return 1
+
+    with cfg_path.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    sources = cfg.get("sources", [])
+    target = args.name or args.path
+    if target is None:
+        print("error: provide --name NAME or a path")
+        return 1
+
+    to_remove = []
+    for i, src in enumerate(sources):
+        if src.get("name") == target:
+            to_remove.append(i)
+        elif args.path and str(Path(src.get("path", "")).resolve()) == str(Path(args.path).resolve()):
+            to_remove.append(i)
+
+    if not to_remove:
+        print(f"error: no source matching {target!r}")
+        print("available sources:")
+        for src in sources:
+            print(f"  {src.get('name')!r} -> {src.get('path')}")
+        return 1
+
+    removed = []
+    for i in sorted(to_remove, reverse=True):
+        removed.append(sources.pop(i))
+
+    with cfg_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True, width=4096)
+
+    for r in removed:
+        print(f"removed source {r.get('name')!r} -> {r.get('path')}")
+
+    if args.purge:
+        cfg_obj = load_config(str(cfg_path))
+        manifest = Manifest(cfg_obj.state_db)
+        for r in removed:
+            pth = r.get("path")
+            n = manifest.conn.execute("DELETE FROM chunks WHERE file_path LIKE ?", (pth + "%",)).rowcount
+            m = manifest.conn.execute("DELETE FROM files WHERE path LIKE ?", (pth + "%",)).rowcount
+            manifest.conn.commit()
+            print(f"  purged {m} files and {n} chunks for {r.get('name')!r}")
+        manifest.close()
+
+    return 0
+
+
 def _slugify(s: str) -> str:
     import re
     s = re.sub(r"\s+", "-", s.strip())
@@ -174,30 +229,123 @@ def cmd_dedup(args) -> int:
 
 
 def cmd_anonymise(args) -> int:
+    import concurrent.futures
     cfg, manifest = _cfg_and_manifest(args)
     run_id = manifest.start_run("anonymise")
-    rows = manifest.pending_chunks()
     tiers_seen: dict[str, int] = {}
     errors = 0
-    for i, r in enumerate(rows):
+    total_done = 0
+    batch_size = 200
+    limit = args.limit
+    workers = 8
+    all_pii: list[tuple[str, str, str]] = []
+
+    # Prefilter regex (same as in anonymise.py)
+    import re
+    from mfl_brain.anonymise import (NAME_RE as name_re, MIN_PII_LEN, MAX_PII_LEN,
+                                     PII_KINDS, _apply, _placeholder,
+                                     _apple_fm_find_pii, _ollama_find_pii)
+
+    def _needs_llm(text: str) -> bool:
+        """Check if text needs LLM-based PII detection."""
+        return re.search(name_re, text) is not None
+
+    def _process_chunk(r):
+        """Process a single chunk. Returns (chunk_id, file_path, text, tier, pii_entries, error)."""
+        from mfl_brain.manifest import Manifest as _M
+        lm = _M(cfg.state_db)
         try:
-            text, tier, n = anonymise_chunk(r["text"], manifest, cfg.anonymiser)
-            manifest.set_chunk_status(r["chunk_id"], "anonymised", text, tier)
-            tiers_seen[tier] = tiers_seen.get(tier, 0) + 1
-            manifest.set_status(r["file_path"], "anonymised")
-        except RuntimeError:
-            manifest.set_chunk_status(r["chunk_id"], "quarantined", tier="quarantined")
-            errors += 1
-            manifest.set_status(r["file_path"], "quarantined",
-                                error="chunk failed all anonymisation tiers")
-        if not args.quiet and (i + 1) % 25 == 0:
-            print(f"[anonymise] {i+1}/{len(rows)} tiers={tiers_seen} quarantined={errors}")
-            write_status(cfg, manifest)
-        if args.limit and i + 1 >= args.limit:
+            chunk_text = r["text"]
+            # Known-PII pre-pass
+            known = lm.known_pii()
+            text = chunk_text
+            for real, (ph, _k) in known.items():
+                if len(real) < MIN_PII_LEN or len(real) > MAX_PII_LEN:
+                    continue
+                if "[[" in real or real not in text:
+                    continue
+                text = re.sub(r"(?<!\w)" + re.escape(real) + r"(?!\w)", ph, text)
+
+            if not _needs_llm(text):
+                return (r["chunk_id"], r["file_path"], text, "prefilter-clean", [], None)
+
+            # LLM tier
+            tiers = cfg.anonymiser.get("preference", ["apple_device", "apple_pcc", "ollama"])
+            ollama_model = cfg.anonymiser.get("ollama_model", "qwen2.5:7b")
+            counter: dict[str, int] = {}
+            last_error = None
+            for tier in tiers:
+                try:
+                    if tier == "apple_pcc":
+                        items = _apple_fm_find_pii(text, use_pcc=True)
+                    elif tier == "apple_device":
+                        items = _apple_fm_find_pii(text, use_pcc=False)
+                    elif tier == "ollama":
+                        items = _ollama_find_pii(text, ollama_model)
+                    else:
+                        continue
+                    new_text, replaced, pii_entries = _apply(text, items, lm, counter)
+                    return (r["chunk_id"], r["file_path"], new_text, tier, pii_entries, None)
+                except Exception as exc:
+                    last_error = exc
+                    continue
+            return (r["chunk_id"], r["file_path"], None, "quarantined", [],
+                    f"all tiers failed: {last_error}")
+        finally:
+            lm.close()
+
+    while True:
+        if limit and total_done >= limit:
             break
+        remaining = (limit - total_done) if limit else batch_size
+        fetch = min(batch_size, remaining) if limit else batch_size
+        rows = manifest.conn.execute(
+            "SELECT c.* FROM chunks c LEFT JOIN files f ON c.file_path=f.path "
+            "WHERE c.status='pending' AND (f.canonical_of IS NULL) ORDER BY c.chunk_id LIMIT ?",
+            (fetch,),
+        ).fetchall()
+        if not rows:
+            break
+
+        # Process chunks in parallel
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(_process_chunk, r): r for r in rows}
+            for fut in concurrent.futures.as_completed(futures):
+                results.append(fut.result())
+
+        # Write results to DB sequentially
+        for chunk_id, file_path, text, tier, pii_entries, err in results:
+            if err is not None or tier == "quarantined":
+                manifest.set_chunk_status(chunk_id, "quarantined", tier="quarantined", commit=False)
+                errors += 1
+                manifest.set_status(file_path, "quarantined",
+                                    error="chunk failed all anonymisation tiers", commit=False)
+            else:
+                manifest.set_chunk_status(chunk_id, "anonymised", text, tier, commit=False)
+                tiers_seen[tier] = tiers_seen.get(tier, 0) + 1
+                manifest.set_status(file_path, "anonymised", commit=False)
+                all_pii.extend(pii_entries)
+            total_done += 1
+            if not args.quiet and total_done % 50 == 0:
+                manifest.conn.commit()
+                for value, ph, kind in all_pii:
+                    manifest.remember_pii(value, ph, kind)
+                all_pii.clear()
+                print(f"[anonymise] {total_done} tiers={tiers_seen} quarantined={errors}", flush=True)
+                write_status(cfg, manifest)
+            if limit and total_done >= limit:
+                break
+
+        manifest.conn.commit()
+        for value, ph, kind in all_pii:
+            manifest.remember_pii(value, ph, kind)
+        all_pii.clear()
+        if not args.quiet:
+            print(f"[anonymise] batch done: {total_done} total, tiers={tiers_seen}", flush=True)
     manifest.finish_run(run_id, f"tiers={tiers_seen} quarantined={errors}")
     _maybe_status(cfg, manifest, force=True)
-    print(f"anonymise: tiers={tiers_seen} quarantined={errors}")
+    print(f"anonymise: {total_done} chunks, tiers={tiers_seen} quarantined={errors}")
     return 0
 
 
@@ -361,7 +509,7 @@ def cmd_incremental(args) -> int:
     rows = manifest.pending_chunks()
     for r in rows:
         try:
-            text, tier, _ = anonymise_chunk(r["text"], manifest, cfg.anonymiser)
+            text, tier, _, _ = anonymise_chunk(r["text"], manifest, cfg.anonymiser)
             manifest.set_chunk_status(r["chunk_id"], "anonymised", text)
         except RuntimeError:
             manifest.set_chunk_status(r["chunk_id"], "quarantined")
@@ -416,6 +564,12 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--crawl", action="store_true", help="Crawl this source immediately after adding")
     sp.add_argument("--limit", type=int, help="Limit files when crawling (with --crawl)")
     sp.set_defaults(fn=cmd_add_path)
+    sp = sub.add_parser("remove-path"); common(sp)
+    sp.add_argument("path", nargs="?", help="Directory path to remove")
+    sp.add_argument("--name", help="Source name to remove")
+    sp.add_argument("--purge", action="store_true",
+                    help="Also delete manifest rows (files + chunks) for this source")
+    sp.set_defaults(fn=cmd_remove_path)
     sp = sub.add_parser("crawl"); common(sp)
     sp.add_argument("--source"); sp.add_argument("--limit", type=int)
     sp.add_argument("--no-walk", action="store_true",

@@ -300,7 +300,7 @@ class PipelineMonitor:
         rows = self.manifest.pending_chunks()
         for r in rows:
             try:
-                text, tier, _ = anonymise_chunk(r["text"], self.manifest, self.cfg.anonymiser)
+                text, tier, _, _ = anonymise_chunk(r["text"], self.manifest, self.cfg.anonymiser)
                 self.manifest.set_chunk_status(r["chunk_id"], "anonymised", text)
             except RuntimeError:
                 self.manifest.set_chunk_status(r["chunk_id"], "quarantined")

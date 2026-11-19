@@ -90,12 +90,13 @@ class Manifest:
         )
         self.conn.commit()
 
-    def set_status(self, path: str, status: str, error: str | None = None) -> None:
+    def set_status(self, path: str, status: str, error: str | None = None, commit: bool = True) -> None:
         self.conn.execute(
             "UPDATE files SET status=?, error=?, updated_at=? WHERE path=?",
             (status, error, time.time(), path),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
     def record_failure(self, path: str, error: str, max_attempts: int = 6) -> bool:
         """Increment attempt count; quarantine if exceeded. Returns True if quarantined.
@@ -163,7 +164,7 @@ class Manifest:
             sql += f" LIMIT {int(limit)}"
         return list(self.conn.execute(sql))
 
-    def set_chunk_status(self, chunk_id: int, status: str, text: str | None = None, tier: str | None = None) -> None:
+    def set_chunk_status(self, chunk_id: int, status: str, text: str | None = None, tier: str | None = None, commit: bool = True) -> None:
         if text is None:
             if tier is None:
                 self.conn.execute(
@@ -186,7 +187,8 @@ class Manifest:
                     "UPDATE chunks SET status=?, text=?, text_sha256=?, tier=?, updated_at=? WHERE chunk_id=?",
                     (status, text, hashlib.sha256(text.encode()).hexdigest(), tier, time.time(), chunk_id),
                 )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
     def chunk_counts(self) -> dict[str, int]:
         rows = self.conn.execute(

@@ -89,7 +89,7 @@ DEFAULT_CONFIG = {
             "exclude_globs": [],
         },
     ],
-    "vault_path": "/Volumes/GCMC_user_data/Users/Gee/Library/CloudStorage/OneDrive-NordAngliaEducation/GCH Obs Pro Vault/Second Brain GCH Work/AI_Work-Vault",
+    "vault_path": "/Volumes/750 Gb HD/Second Brain GCH Work /AI_Work-Vault",
     "state_db": "/Volumes/GCMC_user_data/Users/Gee/Library/CloudStorage/OneDrive-NordAngliaEducation/GCH Obs Pro Vault/Second Brain GCH Work/.ingest-state/manifest.db",
     "index_db": "/Volumes/GCMC_user_data/Users/Gee/Library/CloudStorage/OneDrive-NordAngliaEducation/GCH Obs Pro Vault/Second Brain GCH Work/.ingest-state/index.db",
     "log_dir": "/Volumes/GCMC_user_data/Users/Gee/Library/CloudStorage/OneDrive-NordAngliaEducation/GCH Obs Pro Vault/Second Brain GCH Work/.ingest-state/logs",

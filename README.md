@@ -13,7 +13,8 @@ synthesis, and a vector index for semantic search.
 - **Per-document-type synthesis** — student work → error taxonomy, reports → voice profile, knowledge → atomic notes
 - **Vector search** — sqlite-vec with namespaced queries
 - **Interactive TUI monitor** — pause/resume, incremental update, live progress
-- **Manual path ingestion** — `add-path` command for ad-hoc folders
+- **Manual path ingestion** — `add-path` / `remove-path` commands for ad-hoc folders
+- **Visual progress monitor** — `scripts/progress_monitor.py` with live bar, ETA, pause/resume
 
 ## Requirements
 
@@ -55,6 +56,8 @@ The config supports:
 
 # Add a source path manually
 .venv/bin/python -m mfl_brain add-path /path/to/folder --name my-folder --crawl
+.venv/bin/python -m mfl_brain remove-path --name my-folder
+.venv/bin/python -m mfl_brain remove-path /path/to/folder --purge
 
 # Run individual stages
 .venv/bin/python -m mfl_brain crawl --source my-folder

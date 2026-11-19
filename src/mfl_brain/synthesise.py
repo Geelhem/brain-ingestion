@@ -4,9 +4,24 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
+import ollama
+
 from .manifest import Manifest
+
+OLLAMA_TIMEOUT_SEC = 300  # 5 minutes per chat call on M4 24GB
+
+
+def ollama_chat_with_timeout(model: str, messages: list[dict], format: str | None = None, timeout: int = OLLAMA_TIMEOUT_SEC):
+    """Call ollama.chat with a hard timeout to avoid indefinite hangs on large models."""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(ollama.chat, model=model, messages=messages, format=format)
+        try:
+            return future.result(timeout=timeout)
+        except FuturesTimeoutError:
+            raise TimeoutError(f"ollama.chat timed out after {timeout}s for model {model}")
 
 
 def safe_note_name(path: str, vault: Path, subfolder: str = "10-Resources") -> tuple[str, Path]:
@@ -137,8 +152,6 @@ def get_synthesis_prompt(doc_type: str, sample: str, cfg) -> str:
 
 
 def summarise_source(manifest: Manifest, file_path: str, cfg, doc_type: str = "resource") -> tuple[str, list[str]] | None:
-    import ollama
-
     model = cfg.synthesis.get("ollama_model", "qwen2.5:14b")
     chunks = manifest.conn.execute(
         "SELECT text FROM chunks WHERE file_path=? AND seq<=4 ORDER BY seq", (file_path,)
@@ -149,7 +162,7 @@ def summarise_source(manifest: Manifest, file_path: str, cfg, doc_type: str = "r
 
     if doc_type in ("student_work", "report", "scheme", "assessment", "cpd", "knowledge", "admin"):
         prompt = get_synthesis_prompt(doc_type, sample, cfg)
-        resp = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], format="json")
+        resp = ollama_chat_with_timeout(model=model, messages=[{"role": "user", "content": prompt}], format="json")
         out = resp["message"]["content"]
         try:
             data = json.loads(out)
@@ -206,7 +219,7 @@ def summarise_source(manifest: Manifest, file_path: str, cfg, doc_type: str = "r
         f"Document:\n\"\"\"{sample}\"\"\"\n\n"
         "Respond in exactly this format:\nSUMMARY: <text>\nTAGS:\nTAG: <topic>\nTAG: <topic>"
     )
-    resp = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
+    resp = ollama_chat_with_timeout(model=model, messages=[{"role": "user", "content": prompt}])
     out = resp["message"]["content"]
     m = re.search(r"SUMMARY:\s*(.*?)(?:\nTAGS:|\Z)", out, re.S)
     summary = m.group(1).strip() if m else out.strip()[:400]
