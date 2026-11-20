@@ -281,17 +281,60 @@ def _apple_fm_find_pii(text: str, use_pcc: bool, timeout: int = 10) -> list[dict
     return [{"value": i.value, "kind": i.kind} for i in parsed.items]
 
 
-def _ollama_find_pii(text: str, model: str) -> list[dict[str, str]]:
-    import ollama
+# HTTP-level timeout for the Ollama client. The default client uses
+# timeout=None, so a stalled connection blocks the worker thread forever
+# in sock_recv (observed via stack sample). 60s read timeout makes the
+# socket itself raise instead of hanging.
+_OLLAMA_HTTP_TIMEOUT = 60.0
+_ollama_client = None
 
+
+def _get_ollama_client():
+    """Lazily create a shared Ollama client with an HTTP timeout."""
+    global _ollama_client
+    if _ollama_client is None:
+        import ollama
+        _ollama_client = ollama.Client(timeout=_OLLAMA_HTTP_TIMEOUT)
+    return _ollama_client
+
+
+def _ollama_find_pii(text: str, model: str, timeout: int = 45) -> list[dict[str, str]]:
+    """Find PII with Ollama.
+
+    Two-layer protection:
+      1. HTTP-level timeout on the client (stalled socket raises)
+      2. Daemon-thread hard guard (abandons any call exceeding `timeout`)
+    """
+    import threading
+
+    client = _get_ollama_client()
     prompt = (
         f"{SYSTEM_PROMPT}\n\nText:\n\"\"\"{text[:6000]}\"\"\"\n\n"
         'Reply with ONLY JSON: {"items":[{"value":"...","kind":"..."}], "items":[]}'
     )
-    resp = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}],
-                       format="json")
-    data = json.loads(resp["message"]["content"])
-    return data.get("items", [])
+
+    out: dict = {}
+
+    def _worker():
+        try:
+            resp = client.chat(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                format="json",
+            )
+            data = json.loads(resp["message"]["content"])
+            out["items"] = data.get("items", [])
+        except Exception as exc:  # noqa: BLE001 — surfaced to tier fallback
+            out["error"] = exc
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(f"ollama call exceeded {timeout}s")
+    if "error" in out:
+        raise out["error"]
+    return out.get("items", [])
 
 
 def _placeholder(kind: str, counter: dict[str, int]) -> str:
