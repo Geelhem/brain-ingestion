@@ -58,6 +58,23 @@ values from Apple FM). Corpus repaired from source; pipeline restarted.
 - Supervisor PID varies (auto-restarts); logs: /tmp/anonymise.log,
   /tmp/supervisor.log
 
+### Session 2026-11-20 — Ollama hang root-caused and fixed (commit 49e3502)
+
+**Symptom:** pipeline froze at 270,342 chunks, 0% CPU, 10+ min no progress.
+
+**Diagnosis (macOS `sample`):** worker thread blocked in `sock_recv` →
+`__recvfrom` (Ollama HTTP read, no timeout); main thread blocked in
+`lock_PyThread_acquire_lock` waiting on that future via as_completed().
+
+**Root cause:** `_ollama_find_pii` called `ollama.chat` directly — the
+timeout wrapper had been lost in an earlier revert. Default ollama Client
+uses httpx `timeout=None` → infinite socket read on a stalled connection.
+
+**Fix:**
+- [x] Shared `ollama.Client(timeout=60)` — stalled sockets raise at HTTP level
+- [x] Daemon-thread hard guard (45s) abandons stuck calls, tier fallback proceeds
+- [x] Verified: 2.9s/call after fix; pipeline resumed at ~6.7 chunks/s, 98.7% prefilter-clean
+
 **Next steps (pending user go-ahead):**
 - [ ] Monitor anonymise to completion (~7 days)
 - [ ] Run synthesise (gemma4:12b-mxfp8, per-doc-type routing + MOCs)
