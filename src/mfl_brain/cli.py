@@ -235,7 +235,7 @@ def cmd_anonymise(args) -> int:
     tiers_seen: dict[str, int] = {}
     errors = 0
     total_done = 0
-    batch_size = 200
+    batch_size = 50
     limit = args.limit
     workers = 8
     all_pii: list[tuple[str, str, str]] = []
