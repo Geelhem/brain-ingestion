@@ -24,7 +24,8 @@ PYTHON = "/opt/homebrew/bin/python3.12"
 SITE = ROOT / ".venv" / "lib" / "python3.12" / "site-packages"
 STALL_SECONDS = 900          # restart if no chunk progress for 15 min
 POLL_SECONDS = 30
-LOG = Path("/tmp/anonymise.log")
+LOG_DIR = ROOT / "logs"
+LOG = LOG_DIR / "anonymise.log"
 
 
 def chunk_progress(state_db: Path) -> int:
@@ -55,6 +56,7 @@ def main() -> int:
     if not cfg.is_absolute():
         cfg = ROOT / cfg
     state_db = ROOT / ".ingest-state" / "manifest.db"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     env = dict(os.environ)
     env["PYTHONPATH"] = f"{ROOT / 'src'}:{SITE}"

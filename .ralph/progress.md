@@ -75,6 +75,13 @@ uses httpx `timeout=None` → infinite socket read on a stalled connection.
 - [x] Daemon-thread hard guard (45s) abandons stuck calls, tier fallback proceeds
 - [x] Verified: 2.9s/call after fix; pipeline resumed at ~6.7 chunks/s, 98.7% prefilter-clean
 
+### Session 2026-11-21 — Pipeline restart after reboot
+
+- [x] Found anonymise stopped at 423,049 chunks (last DB write 12:23:38 HKT); machine rebooted ~14:38 HKT and `/tmp` logs were lost.
+- [x] Changed supervisor log path from `/tmp/anonymise.log` to durable `logs/anonymise.log` under project root.
+- [x] Restarted supervisor (PID 85999) with stdout to `logs/supervisor.log`; worker PID 86066 at ~326% CPU.
+- [x] Verified progress: 423,049 -> 423,492 chunks in 45s (~9.8 chunks/s), batch tiers 100% prefilter-clean.
+
 **Next steps (pending user go-ahead):**
 - [ ] Monitor anonymise to completion (~7 days)
 - [ ] Run synthesise (gemma4:12b-mxfp8, per-doc-type routing + MOCs)
