@@ -207,7 +207,8 @@ def cmd_crawl(args) -> int:
     run_id = manifest.start_run("crawl")
     stats = crawl(cfg, manifest, only_source=args.source,
                   limit=args.limit, verbose=not args.quiet,
-                  walk=not args.no_walk, delay_ms=args.delay)
+                  walk=not args.no_walk, delay_ms=args.delay,
+                  ext=args.ext, order=args.order)
     manifest.finish_run(run_id, str(stats))
     _maybe_status(cfg, manifest, force=True)
     print("crawl:", stats)
@@ -574,6 +575,9 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--source"); sp.add_argument("--limit", type=int)
     sp.add_argument("--no-walk", action="store_true",
                     help="retry known failed/pending files without re-walking sources")
+    sp.add_argument("--ext", help="only retry this extension in no-walk mode (e.g. pdf)")
+    sp.add_argument("--order", default="updated_at", choices=["updated_at", "size", "path"],
+                    help="retry order in no-walk mode (size = smallest first)")
     sp.add_argument("--delay", type=int, default=100, help="ms pause between files (OneDrive pacing)")
     sp.set_defaults(fn=cmd_crawl)
     sp = sub.add_parser("dedup"); common(sp)

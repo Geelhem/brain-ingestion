@@ -58,6 +58,11 @@ STATUSES = [
     "synthesised", "indexed", "failed", "quarantined",
 ]
 
+# Total extraction attempts allowed for a file that yields too little text:
+# the first attempt plus two retries. Once attempts reaches this bound the
+# file stays in `extraction_failed` and is no longer selected for retry.
+MAX_EXTRACTION_ATTEMPTS = 3
+
 
 class Manifest:
     def __init__(self, db_path: Path):
@@ -118,6 +123,21 @@ class Manifest:
             self.conn.commit()
             return True
         return False
+
+    def record_extraction_failure(self, path: str, error: str) -> int:
+        """Mark a file `extraction_failed` and increment its attempt count.
+
+        Returns the new attempt count. Files are retried only while
+        attempts < MAX_EXTRACTION_ATTEMPTS (see crawler no-walk selection).
+        """
+        self.conn.execute(
+            "UPDATE files SET status='extraction_failed', "
+            "attempts=COALESCE(attempts,0)+1, error=?, updated_at=? WHERE path=?",
+            (error[:400], time.time(), path),
+        )
+        self.conn.commit()
+        row = self.conn.execute("SELECT attempts FROM files WHERE path=?", (path,)).fetchone()
+        return int(row["attempts"]) if row and row["attempts"] is not None else 0
 
     def set_field(self, path: str, field: str, value: str | None) -> None:
         assert field in ("sha256", "content_sha256", "canonical_of", "note_path", "doc_type")

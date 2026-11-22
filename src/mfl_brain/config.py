@@ -110,7 +110,7 @@ DEFAULT_CONFIG = {
     "ocr": {
         "enabled": True,
         "engine": "tesseract",
-        "languages": ["eng", "fra", "spa"],
+        "languages": ["eng", "fra", "spa", "deu"],
         "only_if_no_text": True,
         "min_text_length": 100,
     },

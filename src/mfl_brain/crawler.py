@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .config import Config, Source
 from .extract import ExtractionError, extract_text
-from .manifest import Manifest
+from .manifest import MAX_EXTRACTION_ATTEMPTS, Manifest
 
 CHUNK_CHARS = 1200
 CHUNK_OVERLAP = 150
@@ -125,9 +125,41 @@ def errno_eq(exc: Exception) -> bool:
     return getattr(exc, "errno", None) in (11, 35, 36)  # EAGAIN, EAGAIN(darwin), ERANGE-ish
 
 
+RETRY_ORDER_COLUMNS = {"updated_at": "updated_at", "size": "size", "path": "path"}
+
+
+def retry_candidates(manifest: Manifest, source: str, limit: int | None = None,
+                     ext: str | None = None, order: str = "updated_at") -> list:
+    """Rows eligible for the patient no-walk retry pass.
+
+    `failed` and `discovered` rows are always retried. `extraction_failed`
+    rows are retried only while they are below MAX_EXTRACTION_ATTEMPTS, so a
+    file that keeps yielding too little text becomes terminal after the bound.
+
+    `ext` (e.g. "pdf") narrows the pass to one file type so a recovery batch
+    stays bounded.
+    """
+    sql = (
+        "SELECT path FROM files WHERE source=? AND ("
+        "status IN ('failed','discovered') "
+        "OR (status='extraction_failed' AND COALESCE(attempts,0) < ?)"
+        ")"
+    )
+    params: list = [source, MAX_EXTRACTION_ATTEMPTS]
+    if ext:
+        sql += " AND lower(path) LIKE ?"
+        params.append(f"%.{ext.lower().lstrip('.')}")
+    order_col = RETRY_ORDER_COLUMNS.get(order, "updated_at")
+    sql += f" ORDER BY {order_col}"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return manifest.conn.execute(sql, params).fetchall()
+
+
 def crawl(cfg: Config, manifest: Manifest, only_source: str | None = None,
           limit: int | None = None, verbose: bool = True,
-          walk: bool = True, delay_ms: int = 100) -> dict[str, int]:
+          walk: bool = True, delay_ms: int = 100, ext: str | None = None,
+          order: str = "updated_at") -> dict[str, int]:
     stats = {"discovered": 0, "extracted": 0, "failed": 0, "skipped": 0, "deferred": 0}
     sources = [s for s in cfg.sources if s.enabled and (only_source is None or s.name == only_source)]
     ocr_config = cfg.ocr
@@ -186,8 +218,8 @@ def crawl(cfg: Config, manifest: Manifest, only_source: str | None = None,
                         fhash = sha256_file(fpath)
                         manifest.set_field(str(fpath), "sha256", fhash)
                         if not text or len(text.split()) < MIN_TEXT_WORDS:
-                            manifest.set_status(str(fpath), "extraction_failed",
-                                                error=f"too little text ({len(text.split())} words)")
+                            manifest.record_extraction_failure(
+                                str(fpath), f"too little text ({len(text.split())} words)")
                             continue
                         manifest.add_chunks(str(fpath), chunk_text(text))
                         manifest.set_field(str(fpath), "content_sha256",
@@ -212,11 +244,7 @@ def crawl(cfg: Config, manifest: Manifest, only_source: str | None = None,
                     if eff_delay:
                         time.sleep(eff_delay / 1000.0)
         else:
-            rows = manifest.conn.execute(
-                "SELECT path FROM files WHERE source=? AND status IN ('failed','discovered') "
-                "ORDER BY updated_at" + (f" LIMIT {int(limit)}" if limit else ""),
-                (src.name,),
-            ).fetchall()
+            rows = retry_candidates(manifest, src.name, limit, ext=ext, order=order)
             for r in rows:
                 fpath = Path(r["path"])
                 if limit and stats["discovered"] >= limit:
@@ -232,8 +260,8 @@ def crawl(cfg: Config, manifest: Manifest, only_source: str | None = None,
                     text = _extract_with_retry(fpath, cfg.ocr, attempts=cfg.crawl.get("extract_attempts", 3))
                     manifest.set_field(str(fpath), "sha256", sha256_file(fpath))
                     if not text or len(text.split()) < MIN_TEXT_WORDS:
-                        manifest.set_status(str(fpath), "extraction_failed",
-                                            error=f"too little text ({len(text.split())} words)")
+                        manifest.record_extraction_failure(
+                            str(fpath), f"too little text ({len(text.split())} words)")
                         continue
                     old = manifest.conn.execute(
                         "SELECT COUNT(*) FROM chunks WHERE file_path=?", (str(fpath),)

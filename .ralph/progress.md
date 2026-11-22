@@ -82,6 +82,14 @@ uses httpx `timeout=None` → infinite socket read on a stalled connection.
 - [x] Restarted supervisor (PID 85999) with stdout to `logs/supervisor.log`; worker PID 86066 at ~326% CPU.
 - [x] Verified progress: 423,049 -> 423,492 chunks in 45s (~9.8 chunks/s), batch tiers 100% prefilter-clean.
 
+### Session 2026-11-22 — Coordinated restart after GS-564 extraction retry
+
+- [x] Diagnosed apparent stall: supervisor was intentionally stopped (`[supervisor] stopping`, no `STALLED` marker) so Paperclip CTO could run GS-564 extraction retry.
+- [x] Confirmed PDF retry complete: `logs/gs564_pdf_crawl3.log` ends `crawl: {'discovered': 150, 'extracted': 60, 'failed': 4, 'skipped': 0, 'deferred': 0}`; no active crawl/requeue processes; backup `.ingest-state/manifest.db.bak-20261122-131034`.
+- [x] Verified CTO work: `tests/test_retry_and_ocr.py` → 7 passed; `git diff --check` clean.
+- [x] Committed CTO changes (bounded extraction retry + German OCR) before restart to preserve audit trail.
+- [x] Remaining `extraction_failed` by ext: docx 1,789; jpg 910; pptx 766; txt 135; gif 100; pdf 86; png 63; jpeg 20; md 10. Coordinate further retries before any future stop.
+
 **Next steps (pending user go-ahead):**
 - [ ] Monitor anonymise to completion (~7 days)
 - [ ] Run synthesise (gemma4:12b-mxfp8, per-doc-type routing + MOCs)

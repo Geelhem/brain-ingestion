@@ -7,6 +7,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Corpus languages: English, French, Spanish, German. Keep in sync with
+# `ocr.languages` in ingest.config.yaml and DEFAULT_CONFIG in config.py.
+DEFAULT_OCR_LANGUAGES = ["eng", "fra", "spa", "deu"]
+
 try:
     import pytesseract
     from pdf2image import convert_from_path
@@ -74,7 +78,7 @@ def extract_with_ocr_fallback(
         logger.info(f"Primary extraction yielded little text for {path.name}, running OCR...")
         ocr_text = ocr_pdf(
             path,
-            languages=ocr_config.get("languages", ["eng"]),
+            languages=ocr_config.get("languages", DEFAULT_OCR_LANGUAGES),
             min_text_length=ocr_config.get("min_text_length", 100)
         )
         if ocr_text and len(ocr_text) > len(text):

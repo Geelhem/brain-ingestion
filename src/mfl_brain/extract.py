@@ -6,7 +6,7 @@ import email
 import email.policy
 from pathlib import Path
 
-from .ocr import extract_with_ocr_fallback, ocr_pdf, ocr_image, needs_ocr
+from .ocr import DEFAULT_OCR_LANGUAGES, extract_with_ocr_fallback, ocr_pdf, ocr_image, needs_ocr
 
 MAX_BYTES = 200 * 1024 * 1024
 
@@ -58,7 +58,7 @@ def _pdf_with_ocr(path: Path, ocr_config: dict | None) -> str:
             from .ocr import ocr_pdf
             ocr_text = ocr_pdf(
                 path,
-                languages=ocr_config.get("languages", ["eng"]),
+                languages=ocr_config.get("languages", DEFAULT_OCR_LANGUAGES),
                 min_text_length=ocr_config.get("min_text_length", 100)
             )
             if ocr_text and len(ocr_text.strip()) > len(text.strip()):
@@ -105,7 +105,7 @@ def _pptx(path: Path) -> str:
                         tf.write(image_bytes)
                         tmp_path = Path(tf.name)
                     from .ocr import ocr_image
-                    img_text = ocr_image(tmp_path, languages=["eng", "fra", "spa"])
+                    img_text = ocr_image(tmp_path, languages=DEFAULT_OCR_LANGUAGES)
                     tmp_path.unlink(missing_ok=True)
                     if img_text.strip():
                         image_texts.append(img_text.strip())
@@ -195,6 +195,4 @@ def _onepkg(path: Path) -> str:
 def _image(path: Path) -> str:
     """OCR an image file to extract any text it contains."""
     from .ocr import ocr_image
-    cfg_ocr = None  # will be filled by caller if needed; use defaults here
-    # ocr_image needs languages; default to eng+fra+spa per config
-    return ocr_image(path, languages=["eng", "fra", "spa"])
+    return ocr_image(path, languages=DEFAULT_OCR_LANGUAGES)
