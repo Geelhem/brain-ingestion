@@ -90,6 +90,15 @@ uses httpx `timeout=None` → infinite socket read on a stalled connection.
 - [x] Committed CTO changes (bounded extraction retry + German OCR) before restart to preserve audit trail.
 - [x] Remaining `extraction_failed` by ext: docx 1,789; jpg 910; pptx 766; txt 135; gif 100; pdf 86; png 63; jpeg 20; md 10. Coordinate further retries before any future stop.
 
+### Session 2026-11-25 — A1/A2 branch split, PII purge, STATUS scan fix
+
+- [x] A1 moved off master onto `experimental/a1-local-optimisation` (now `0f9f2ee`); master force-pushed back to `fabdab1`; local backup ref `backup/master-before-experimental` kept.
+- [x] A2 note committed in PAI repo: `DOCS_DIR/MFL_Brain_CloudAFM_MCP_RAG_Notes.md`.
+- [x] PII junk purge applied: 3,627 rows deleted from 26,016; backup `.ingest-state/manifest.pii-junk-backup.20261125-172522.db` (4.0 GB).
+- [x] Root cause of post-restart stall found via `sample`: main thread stuck in `sqlite3_step` → `pread` doing `SELECT status, COUNT(*) FROM chunks GROUP BY status` from `render_status()`, called every 50 chunks. Fixed in `0f9f2ee` — STATUS.md now written once at stage end.
+- [x] Full test suite: 45 passed.
+- [ ] Verify rate after supervisor integrity guard completes and worker restarts.
+
 **Next steps (pending user go-ahead):**
 - [ ] Monitor anonymise to completion (~7 days)
 - [ ] Run synthesise (gemma4:12b-mxfp8, per-doc-type routing + MOCs)
