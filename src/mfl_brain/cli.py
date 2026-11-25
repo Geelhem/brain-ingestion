@@ -231,6 +231,8 @@ def cmd_dedup(args) -> int:
 
 def cmd_anonymise(args) -> int:
     import concurrent.futures
+    from types import MappingProxyType
+
     cfg, manifest = _cfg_and_manifest(args)
     run_id = manifest.start_run("anonymise")
     tiers_seen: dict[str, int] = {}
@@ -241,59 +243,20 @@ def cmd_anonymise(args) -> int:
     workers = 8
     all_pii: list[tuple[str, str, str]] = []
 
-    # Prefilter regex (same as in anonymise.py)
-    import re
-    from mfl_brain.anonymise import (NAME_RE as name_re, MIN_PII_LEN, MAX_PII_LEN,
-                                     PII_KINDS, _apply, _placeholder,
-                                     _apple_fm_find_pii, _ollama_find_pii)
-
-    def _needs_llm(text: str) -> bool:
-        """Check if text needs LLM-based PII detection."""
-        return re.search(name_re, text) is not None
+    # ONE read-only snapshot shared by all workers.  Workers never touch the
+    # DB (no per-chunk connection / PRAGMA / schema / migration setup); the
+    # snapshot is refreshed at batch boundaries once new PII is durable.
+    known = MappingProxyType(dict(manifest.known_pii()))
 
     def _process_chunk(r):
-        """Process a single chunk. Returns (chunk_id, file_path, text, tier, pii_entries, error)."""
-        from mfl_brain.manifest import Manifest as _M
-        lm = _M(cfg.state_db)
+        """Process one chunk using the shared snapshot; returns a result tuple."""
         try:
-            chunk_text = r["text"]
-            # Known-PII pre-pass
-            known = lm.known_pii()
-            text = chunk_text
-            for real, (ph, _k) in known.items():
-                if len(real) < MIN_PII_LEN or len(real) > MAX_PII_LEN:
-                    continue
-                if "[[" in real or real not in text:
-                    continue
-                text = re.sub(r"(?<!\w)" + re.escape(real) + r"(?!\w)", ph, text)
-
-            if not _needs_llm(text):
-                return (r["chunk_id"], r["file_path"], text, "prefilter-clean", [], None)
-
-            # LLM tier
-            tiers = cfg.anonymiser.get("preference", ["apple_device", "apple_pcc", "ollama"])
-            ollama_model = cfg.anonymiser.get("ollama_model", "qwen2.5:7b")
-            counter: dict[str, int] = {}
-            last_error = None
-            for tier in tiers:
-                try:
-                    if tier == "apple_pcc":
-                        items = _apple_fm_find_pii(text, use_pcc=True)
-                    elif tier == "apple_device":
-                        items = _apple_fm_find_pii(text, use_pcc=False)
-                    elif tier == "ollama":
-                        items = _ollama_find_pii(text, ollama_model)
-                    else:
-                        continue
-                    new_text, replaced, pii_entries = _apply(text, items, lm, counter)
-                    return (r["chunk_id"], r["file_path"], new_text, tier, pii_entries, None)
-                except Exception as exc:
-                    last_error = exc
-                    continue
-            return (r["chunk_id"], r["file_path"], None, "quarantined", [],
-                    f"all tiers failed: {last_error}")
-        finally:
-            lm.close()
+            text, tier, _replaced, pii_entries = anonymise_chunk(
+                r["text"], known=known, cfg_anonymiser=cfg.anonymiser
+            )
+            return (r["chunk_id"], r["file_path"], text, tier, pii_entries, None)
+        except RuntimeError as exc:
+            return (r["chunk_id"], r["file_path"], None, "quarantined", [], str(exc))
 
     while True:
         if limit and total_done >= limit:
@@ -308,14 +271,11 @@ def cmd_anonymise(args) -> int:
         if not rows:
             break
 
-        # Process chunks in parallel
-        results = []
+        # Process chunks in parallel — all read the same immutable snapshot.
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = {ex.submit(_process_chunk, r): r for r in rows}
-            for fut in concurrent.futures.as_completed(futures):
-                results.append(fut.result())
+            results = list(ex.map(_process_chunk, rows))
 
-        # Write results to DB sequentially
+        # Write results to DB sequentially on the single manifest connection.
         for chunk_id, file_path, text, tier, pii_entries, err in results:
             if err is not None or tier == "quarantined":
                 manifest.set_chunk_status(chunk_id, "quarantined", tier="quarantined", commit=False)
@@ -328,22 +288,23 @@ def cmd_anonymise(args) -> int:
                 manifest.set_status(file_path, "anonymised", commit=False)
                 all_pii.extend(pii_entries)
             total_done += 1
-            if not args.quiet and total_done % 50 == 0:
-                manifest.conn.commit()
-                for value, ph, kind in all_pii:
-                    manifest.remember_pii(value, ph, kind)
-                all_pii.clear()
-                print(f"[anonymise] {total_done} tiers={tiers_seen} quarantined={errors}", flush=True)
-                write_status(cfg, manifest)
-            if limit and total_done >= limit:
-                break
 
-        manifest.conn.commit()
-        for value, ph, kind in all_pii:
-            manifest.remember_pii(value, ph, kind)
+        # Persist PII and all status changes with ONE commit (no per-entry
+        # remember_pii commits, no duplicate end-of-batch commit).
+        manifest.remember_pii_batch(all_pii, commit=False)
         all_pii.clear()
+        manifest.conn.commit()
+        # Refresh the read-only snapshot now that new mappings are durable.
+        known = MappingProxyType(dict(manifest.known_pii()))
+
+        if not args.quiet and total_done % 50 == 0:
+            print(f"[anonymise] {total_done} tiers={tiers_seen} quarantined={errors}", flush=True)
+            write_status(cfg, manifest)
         if not args.quiet:
             print(f"[anonymise] batch done: {total_done} total, tiers={tiers_seen}", flush=True)
+        if limit and total_done >= limit:
+            break
+
     manifest.finish_run(run_id, f"tiers={tiers_seen} quarantined={errors}")
     _maybe_status(cfg, manifest, force=True)
     print(f"anonymise: {total_done} chunks, tiers={tiers_seen} quarantined={errors}")

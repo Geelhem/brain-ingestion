@@ -7,9 +7,10 @@ backends so a failure at one tier falls cleanly to the next.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-import uuid
+import threading
 from typing import Any
 
 REDACTION_SCHEMA: dict[str, Any] = {
@@ -259,25 +260,53 @@ def _apple_fm_ok() -> bool:
     return fm_available_cache
 
 
-def _apple_fm_find_pii(text: str, use_pcc: bool, timeout: int = 10) -> list[dict[str, str]]:
+# One event loop reused for every Apple FM call.  asyncio.run() creates and
+# tears down a loop per call, which is wasteful in a long-running batch worker.
+# Apple FM calls are serialised because run_until_complete() is not re-entrant.
+_apple_loop: Any = None
+_apple_loop_lock = threading.Lock()
+_apple_call_lock = threading.Lock()
+
+
+def _get_apple_loop():
     import asyncio
+
+    global _apple_loop
+    with _apple_loop_lock:
+        if _apple_loop is None or _apple_loop.is_closed():
+            _apple_loop = asyncio.new_event_loop()
+        return _apple_loop
+
+
+def _apple_fm_find_pii(text: str, use_pcc: bool, timeout: int = 10) -> list[dict[str, str]]:
+    """Run one Apple Foundation Models redaction call.
+
+    `use_pcc` is an explicit routing hint: True permits Private Cloud Compute,
+    False requests on-device only.  apple-fm-sdk does not expose a PCC toggle
+    (the system routes automatically), so both values reach the same backend —
+    callers must therefore attempt the Apple tier only ONCE (see
+    anonymise_chunk), rather than retrying an identical pcc/device call.
+    """
+    import asyncio
+
+    if not _apple_fm_ok():
+        raise RuntimeError("Apple Foundation Model unavailable")
 
     model = _fm.SystemLanguageModel()
     session = _fm.LanguageModelSession(model=model, instructions=SYSTEM_PROMPT)
 
     async def _run() -> RedactionList:
-        result = await asyncio.wait_for(
-            session.respond(text[:8000], generating=RedactionList),
-            timeout=timeout,
-        )
+        result = await session.respond(text[:8000], generating=RedactionList)
         if isinstance(result, RedactionList):
             return result
         return RedactionList._from_generated_content(result)
 
-    try:
-        parsed = asyncio.run(_run())
-    except asyncio.TimeoutError:
-        raise TimeoutError(f"apple fm call exceeded {timeout}s")
+    loop = _get_apple_loop()
+    with _apple_call_lock:
+        try:
+            parsed = loop.run_until_complete(asyncio.wait_for(_run(), timeout=timeout))
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(f"apple fm call exceeded {timeout}s") from exc
     return [{"value": i.value, "kind": i.kind} for i in parsed.items]
 
 
@@ -337,14 +366,26 @@ def _ollama_find_pii(text: str, model: str, timeout: int = 45) -> list[dict[str,
     return out.get("items", [])
 
 
-def _placeholder(kind: str, counter: dict[str, int]) -> str:
+def _placeholder(kind: str, value: str) -> str:
+    """Deterministic placeholder for a value.
+
+    Deriving the suffix from the value (rather than a per-chunk counter) means
+    the same identifier always maps to the same placeholder across chunks and
+    runs, and distinct identifiers never collide.  This is the source-level
+    half of the collision fix; remember_pii_batch() is the defensive half.
+    """
     prefix = KIND_PREFIX.get(kind, "MISC")
-    counter[prefix] = counter.get(prefix, 0) + 1
-    return f"[[{prefix}-{counter[prefix]:04d}]]"
+    digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
+    return f"[[{prefix}-{digest}]]"
 
 
-def _apply(text: str, items: list[dict[str, str]], manifest,
-           counter: dict[str, int]) -> tuple[str, int, list[tuple[str, str, str]]]:
+def _apply(text: str, items: list[dict[str, str]], known: dict[str, tuple[str, str]],
+           counter: dict[str, int] | None = None) -> tuple[str, int, list[tuple[str, str, str]]]:
+    """Replace PII values in `text` using a read-only `known` snapshot.
+
+    `counter` is accepted for backwards compatibility but no longer used —
+    placeholders are deterministic (see _placeholder).
+    """
     replaced = 0
     pii_entries: list[tuple[str, str, str]] = []
     for item in items:
@@ -356,9 +397,9 @@ def _apply(text: str, items: list[dict[str, str]], manifest,
             continue
         if len(value) > MAX_PII_LEN or "[[" in value:
             continue
-        ph, _ = manifest.known_pii().get(value, (None, None))
+        ph, _ = known.get(value, (None, None))
         if ph is None:
-            ph = _placeholder(kind, counter)
+            ph = _placeholder(kind, value)
             pii_entries.append((value, ph, kind))
         pattern = re.compile(r"(?<!\w)" + re.escape(value) + r"(?!\w)")
         new_text, n = pattern.subn(ph, text)
@@ -368,9 +409,24 @@ def _apply(text: str, items: list[dict[str, str]], manifest,
     return text, replaced, pii_entries
 
 
-def anonymise_chunk(chunk_text: str, manifest, cfg_anonymiser: dict) -> tuple[str, str, int, list[tuple[str, str, str]]]:
-    """Returns (anonymised_text, tier_used, replacements). Tier: pcc/device/ollama/quarantine."""
-    known = manifest.known_pii()
+def anonymise_chunk(
+    chunk_text: str,
+    manifest=None,
+    cfg_anonymiser: dict | None = None,
+    *,
+    known: dict[str, tuple[str, str]] | None = None,
+) -> tuple[str, str, int, list[tuple[str, str, str]]]:
+    """Anonymise one chunk: (text, tier, replacements, pii_entries).
+
+    `known` is a read-only snapshot of real -> (placeholder, kind).  The CLI
+    passes one snapshot shared by all workers and never opens a per-chunk DB
+    connection.  When omitted it is derived from `manifest` for backwards
+    compatibility (e.g. cmd_incremental).
+    """
+    if known is None:
+        known = manifest.known_pii() if manifest is not None else {}
+    cfg_anonymiser = cfg_anonymiser or {}
+
     text = chunk_text
     for real, (ph, _k) in known.items():
         if len(real) < MIN_PII_LEN or len(real) > MAX_PII_LEN:
@@ -411,25 +467,37 @@ def anonymise_chunk(chunk_text: str, manifest, cfg_anonymiser: dict) -> tuple[st
 
     tiers = cfg_anonymiser.get("preference", ["apple_pcc", "apple_device", "ollama"])
     ollama_model = cfg_anonymiser.get("ollama_model", "qwen2.5:14b")
-    counter: dict[str, int] = {}
+    # Explicit config override: use_pcc=False disables the PCC tier entirely.
+    use_pcc_cfg = cfg_anonymiser.get("use_pcc")
     last_error: Exception | None = None
+    apple_attempted = False
     for tier in tiers:
-        try:
-            if tier == "apple_pcc":
-                if not _apple_fm_ok():
-                    continue
-                items = _apple_fm_find_pii(text, use_pcc=True)
-            elif tier == "apple_device":
-                if not _apple_fm_ok():
-                    continue
-                items = _apple_fm_find_pii(text, use_pcc=False)
-            elif tier == "ollama":
-                items = _ollama_find_pii(text, ollama_model)
-            else:
+        if tier in ("apple_pcc", "apple_device"):
+            if tier == "apple_pcc" and use_pcc_cfg is False:
                 continue
-            new_text, replaced, pii_entries = _apply(text, items, manifest, counter)
-            return new_text, tier, replaced, pii_entries
-        except Exception as exc:  # noqa: BLE001 — tier fallback is the point
-            last_error = exc
+            # apple-fm-sdk routes on-device/PCC automatically — both tiers hit
+            # the same backend. Attempt Apple ONCE, honouring the first tier's
+            # use_pcc hint, instead of making an identical second call.
+            if apple_attempted:
+                continue
+            apple_attempted = True
+            if not _apple_fm_ok():
+                last_error = RuntimeError("Apple Foundation Model unavailable")
+                continue
+            use_pcc = (tier == "apple_pcc") if use_pcc_cfg is None else bool(use_pcc_cfg)
+            try:
+                items = _apple_fm_find_pii(text, use_pcc=use_pcc)
+            except Exception as exc:  # noqa: BLE001 — tier fallback is the point
+                last_error = exc
+                continue
+        elif tier == "ollama":
+            try:
+                items = _ollama_find_pii(text, ollama_model)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                continue
+        else:
             continue
+        new_text, replaced, pii_entries = _apply(text, items, known)
+        return new_text, tier, replaced, pii_entries
     raise RuntimeError(f"all anonymisation tiers failed; last error: {last_error}")
