@@ -26,10 +26,114 @@ STALL_SECONDS = 900          # restart if no chunk progress for 15 min
 POLL_SECONDS = 30
 LOG_DIR = ROOT / "logs"
 LOG = LOG_DIR / "anonymise.log"
+GUARD = ROOT / "scripts" / "integrity_guard.py"
+GUARD_TIMEOUT = 3600         # quick_check on the 4 GB manifest can take ~35 min
+GUARD_MIN_INTERVAL = 900     # skip a repeat check if one passed this recently
+GUARD_RETRY_SECONDS = 900    # idle this long after a failed/unreachable check
+
+RC_TIMEOUT = 4  # sentinel: the guard did not finish, treat as transient
+
+
+def run_integrity_guard(cfg: Path) -> int:
+    """Check/repair the manifest before starting the writer.
+
+    Returns the guard's exit code: 0 healthy/repaired, 2 unrecoverable,
+    3 transient (DB busy), 4 transient (check timed out). The guard logs to
+    logs/integrity.log.
+    """
+    print("[supervisor] running integrity guard", flush=True)
+    try:
+        proc = subprocess.run(
+            [PYTHON, str(GUARD), "--config", str(cfg)],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=GUARD_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        print("[supervisor] integrity guard TIMED OUT", flush=True)
+        return RC_TIMEOUT
+    for line in (proc.stdout or "").splitlines():
+        print(f"[supervisor] {line}", flush=True)
+    if proc.stderr:
+        for line in proc.stderr.splitlines():
+            print(f"[supervisor] guard stderr: {line}", flush=True)
+    return proc.returncode
+
+
+def terminate_stale_writers() -> None:
+    """Kill orphaned `mfl_brain.cli anonymise` writers.
+
+    If a previous supervisor was SIGKILLed (or crashed), its child keeps
+    writing. Starting another child would put two writers on one manifest, so
+    clean up any orphan before we launch ours.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            capture_output=True, text=True, check=False,
+        ).stdout
+    except Exception:  # noqa: BLE001
+        return
+    me = os.getpid()
+    for line in out.splitlines():
+        line = line.strip()
+        if "mfl_brain.cli anonymise" not in line or "grep" in line:
+            continue
+        try:
+            pid = int(line.split()[0])
+        except (ValueError, IndexError):
+            continue
+        if pid == me:
+            continue
+        print(f"[supervisor] terminating stale anonymise writer pid={pid}", flush=True)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        for _ in range(30):
+            time.sleep(1)
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+        else:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def _sleep(seconds: int, stopping) -> None:
+    """Sleep up to `seconds`, waking early when a stop signal arrives."""
+    for _ in range(int(seconds)):
+        if stopping():
+            return
+        time.sleep(1)
 
 
 def chunk_progress(state_db: Path) -> int:
-    """Count chunks in a terminal state — used to detect stalls."""
+    """Progress for stall detection.
+
+    Prefer the worker's own log counter: the DB count query
+    `SELECT COUNT(*) FROM chunks WHERE status IN (...)` scans millions of
+    index entries on every 30s poll and itself stalls the supervisor on the
+    large external-volume manifest. The worker prints a cumulative
+    `[anonymise] N tiers=...` line every 50 chunks; read the last one.
+    Fall back to the DB count only if the log has no counter yet.
+    """
+    import re
+
+    try:
+        with LOG.open("r", errors="replace") as f:
+            for line in reversed(f.readlines()[-200:]):
+                m = re.match(r"^\[anonymise\] (\d+) tiers=", line)
+                if m:
+                    return int(m.group(1))
+    except Exception:
+        pass
+
     try:
         import sqlite3
 
@@ -71,7 +175,32 @@ def main() -> int:
     signal.signal(signal.SIGINT, _sig)
     signal.signal(signal.SIGTERM, _sig)
 
+    terminate_stale_writers()
+
+    last_guard_ok = 0.0
     while not stopping:
+        if time.time() - last_guard_ok >= GUARD_MIN_INTERVAL:
+            grc = run_integrity_guard(cfg)
+            if grc == 3:
+                print("[supervisor] DB busy; waiting 60s before retrying the guard", flush=True)
+                _sleep(60, lambda: stopping)
+                continue
+            if grc == RC_TIMEOUT:
+                print("[supervisor] integrity check did not finish; retrying later", flush=True)
+                _sleep(GUARD_RETRY_SECONDS, lambda: stopping)
+                continue
+            if grc != 0:
+                # Confirmed unrecoverable corruption: never start the writer.
+                # Stay alive and re-check later instead of exiting, so launchd
+                # KeepAlive does not turn this into a crash loop.
+                print(
+                    f"[supervisor] CRITICAL integrity guard rc={grc} — skipping writes; "
+                    f"re-check in {GUARD_RETRY_SECONDS}s (see logs/INTEGRITY-FAILURE.txt)",
+                    flush=True,
+                )
+                _sleep(GUARD_RETRY_SECONDS, lambda: stopping)
+                continue
+            last_guard_ok = time.time()
         print(f"[supervisor] starting anonymise (restart #{restarts})", flush=True)
         with LOG.open("a") as logf:
             logf.write(f"\n===== supervisor start {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
@@ -87,7 +216,7 @@ def main() -> int:
             last_progress = -1
             last_change = time.time()
             while proc.poll() is None and not stopping:
-                time.sleep(POLL_SECONDS)
+                _sleep(POLL_SECONDS, lambda: stopping)
                 if stopping:
                     break
                 n = chunk_progress(state_db)
@@ -138,7 +267,7 @@ def main() -> int:
                 print(f"[supervisor] {pending} chunks still pending — restarting", flush=True)
 
             restarts += 1
-            time.sleep(5)
+            _sleep(5, lambda: stopping)
 
     return 0
 
