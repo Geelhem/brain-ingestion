@@ -260,24 +260,6 @@ def _apple_fm_ok() -> bool:
     return fm_available_cache
 
 
-# One event loop reused for every Apple FM call.  asyncio.run() creates and
-# tears down a loop per call, which is wasteful in a long-running batch worker.
-# Apple FM calls are serialised because run_until_complete() is not re-entrant.
-_apple_loop: Any = None
-_apple_loop_lock = threading.Lock()
-_apple_call_lock = threading.Lock()
-
-
-def _get_apple_loop():
-    import asyncio
-
-    global _apple_loop
-    with _apple_loop_lock:
-        if _apple_loop is None or _apple_loop.is_closed():
-            _apple_loop = asyncio.new_event_loop()
-        return _apple_loop
-
-
 def _apple_fm_find_pii(text: str, use_pcc: bool, timeout: int = 10) -> list[dict[str, str]]:
     """Run one Apple Foundation Models redaction call.
 
@@ -286,28 +268,42 @@ def _apple_fm_find_pii(text: str, use_pcc: bool, timeout: int = 10) -> list[dict
     (the system routes automatically), so both values reach the same backend —
     callers must therefore attempt the Apple tier only ONCE (see
     anonymise_chunk), rather than retrying an identical pcc/device call.
+
+    Hard guard: the SDK call can block inside native code, where asyncio's
+    wait_for() cannot interrupt it.  Run it in a daemon thread and abandon the
+    thread after `timeout` seconds so one stuck call cannot freeze the worker.
     """
     import asyncio
 
     if not _apple_fm_ok():
         raise RuntimeError("Apple Foundation Model unavailable")
 
-    model = _fm.SystemLanguageModel()
-    session = _fm.LanguageModelSession(model=model, instructions=SYSTEM_PROMPT)
+    out: dict = {}
 
-    async def _run() -> RedactionList:
-        result = await session.respond(text[:8000], generating=RedactionList)
-        if isinstance(result, RedactionList):
-            return result
-        return RedactionList._from_generated_content(result)
-
-    loop = _get_apple_loop()
-    with _apple_call_lock:
+    def _worker() -> None:
         try:
-            parsed = loop.run_until_complete(asyncio.wait_for(_run(), timeout=timeout))
-        except asyncio.TimeoutError as exc:
-            raise TimeoutError(f"apple fm call exceeded {timeout}s") from exc
-    return [{"value": i.value, "kind": i.kind} for i in parsed.items]
+            model = _fm.SystemLanguageModel()
+            session = _fm.LanguageModelSession(model=model, instructions=SYSTEM_PROMPT)
+
+            async def _run() -> RedactionList:
+                result = await session.respond(text[:8000], generating=RedactionList)
+                if isinstance(result, RedactionList):
+                    return result
+                return RedactionList._from_generated_content(result)
+
+            parsed = asyncio.run(asyncio.wait_for(_run(), timeout=timeout))
+            out["items"] = [{"value": i.value, "kind": i.kind} for i in parsed.items]
+        except Exception as exc:  # noqa: BLE001 — surfaced to tier fallback
+            out["error"] = exc
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout + 2)
+    if t.is_alive():
+        raise TimeoutError(f"apple fm call exceeded {timeout}s")
+    if "error" in out:
+        raise out["error"]
+    return out.get("items", [])
 
 
 # HTTP-level timeout for the Ollama client. The default client uses
