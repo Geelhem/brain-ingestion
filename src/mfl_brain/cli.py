@@ -298,8 +298,12 @@ def cmd_anonymise(args) -> int:
         known = MappingProxyType(dict(manifest.known_pii()))
 
         if not args.quiet and total_done % 50 == 0:
+            # NOTE: do not call write_status() here. render_status() runs
+            # SELECT status, COUNT(*) FROM chunks GROUP BY status — a full
+            # scan of the multi-million-row chunks table. Doing that every
+            # 50 chunks dominated runtime. STATUS.md is written once at
+            # stage end via _maybe_status(force=True) below.
             print(f"[anonymise] {total_done} tiers={tiers_seen} quarantined={errors}", flush=True)
-            write_status(cfg, manifest)
         if not args.quiet:
             print(f"[anonymise] batch done: {total_done} total, tiers={tiers_seen}", flush=True)
         if limit and total_done >= limit:
