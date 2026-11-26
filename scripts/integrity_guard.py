@@ -26,6 +26,7 @@ Exit codes
 from __future__ import annotations
 
 import argparse
+import fcntl
 import sqlite3
 import sys
 import time
@@ -34,6 +35,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LOG = ROOT / "logs" / "integrity.log"
 MARKER = ROOT / "logs" / "INTEGRITY-FAILURE.txt"
+LOCK = ROOT / "logs" / "integrity.lock"
 BUSY_TIMEOUT_MS = 60_000
 
 # Substrings that identify index-only corruption we can safely repair.
@@ -108,6 +110,19 @@ def main() -> int:
     ap.add_argument("--full", action="store_true",
                     help="use PRAGMA integrity_check instead of quick_check")
     args = ap.parse_args()
+
+    # The launchd-scheduled guard and the supervisor's pre-start guard can
+    # fire together at boot. A quick_check on the ~4 GB external-volume DB is
+    # I/O-bound, so two concurrent checks stall the writer for minutes. Let
+    # one instance run and have the other bow out; the lock is released by
+    # process exit on every return path.
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    lock_fh = LOCK.open("a+")
+    try:
+        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log("skip: another integrity guard is already running")
+        return 0
 
     db = _resolve_db(args.config, args.db)
     if db is None or not db.exists():
