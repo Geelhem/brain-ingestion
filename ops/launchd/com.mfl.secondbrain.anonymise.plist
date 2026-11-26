@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mfl.secondbrain.anonymise</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/python3.12</string>
+    <string>/Users/Gee/ai_lab/mfl_second_brain/scripts/anonymise_supervisor.py</string>
+    <string>--config</string>
+    <string>/Users/Gee/ai_lab/mfl_second_brain/ingest.config.yaml</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/Gee/ai_lab/mfl_second_brain</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/Gee/ai_lab/mfl_second_brain/logs/launchd-anonymise.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/Gee/ai_lab/mfl_second_brain/logs/launchd-anonymise.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>

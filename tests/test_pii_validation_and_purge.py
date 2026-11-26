@@ -228,6 +228,26 @@ def test_prefilter_allows_real_name_to_llm(monkeypatch):
     assert entries == [("Jean Dupont", entries[0][1], "person")]
 
 
+def test_malformed_llm_items_do_not_crash_anonymise(monkeypatch):
+    import mfl_brain.anonymise as a
+
+    def _fake_ollama(text, model, timeout=45):
+        # Model returned junk alongside one valid item (GS-568 crash-loop).
+        return ["Jean Dupont", {"value": None, "kind": "person"},
+                {"value": "Marie Curie", "kind": "person"}, 42]
+
+    monkeypatch.setattr(a, "_ollama_find_pii", _fake_ollama)
+    out, tier, _replaced, entries = a.anonymise_chunk(
+        "Marie Curie and Jean Dupont attended the meeting.",
+        known={},
+        cfg_anonymiser={"preference": ["ollama"], "ollama_model": "test"},
+    )
+    assert tier == "ollama"
+    assert "Marie Curie" not in out
+    assert len(entries) == 1
+    assert entries[0][0] == "Marie Curie"
+
+
 def test_apple_tier_attempted_once_and_use_pcc_honoured(monkeypatch):
     import mfl_brain.anonymise as a
 

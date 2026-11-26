@@ -335,7 +335,7 @@ def _ollama_find_pii(text: str, model: str, timeout: int = 45) -> list[dict[str,
     client = _get_ollama_client()
     prompt = (
         f"{SYSTEM_PROMPT}\n\nText:\n\"\"\"{text[:6000]}\"\"\"\n\n"
-        'Reply with ONLY JSON: {"items":[{"value":"...","kind":"..."}], "items":[]}'
+        'Reply with ONLY JSON: {"items":[{"value":"...","kind":"..."}]} or {"items":[]}'
     )
 
     out: dict = {}
@@ -348,7 +348,18 @@ def _ollama_find_pii(text: str, model: str, timeout: int = 45) -> list[dict[str,
                 format="json",
             )
             data = json.loads(resp["message"]["content"])
-            out["items"] = data.get("items", [])
+            raw_items = data.get("items", [])
+            # The model sometimes returns a list of strings or other junk
+            # instead of objects. Normalise here so _apply never sees a
+            # non-dict item (which used to crash the worker with AttributeError
+            # and put the supervisor into a restart loop).
+            items = []
+            for entry in raw_items if isinstance(raw_items, list) else []:
+                if isinstance(entry, dict):
+                    value, kind = entry.get("value"), entry.get("kind", "other")
+                    if isinstance(value, str) and isinstance(kind, str):
+                        items.append({"value": value, "kind": kind})
+            out["items"] = items
         except Exception as exc:  # noqa: BLE001 — surfaced to tier fallback
             out["error"] = exc
 
@@ -385,8 +396,16 @@ def _apply(text: str, items: list[dict[str, str]], known: dict[str, tuple[str, s
     replaced = 0
     pii_entries: list[tuple[str, str, str]] = []
     for item in items:
+        # LLM tiers can return malformed items (e.g. bare strings). Skip them
+        # instead of crashing the whole anonymise batch.
+        if not isinstance(item, dict):
+            continue
         value = (item.get("value") or "").strip()
+        if not isinstance(value, str):
+            continue
         kind = item.get("kind", "other")
+        if not isinstance(kind, str):
+            kind = "other"
         if kind not in PII_KINDS:
             kind = "other"
         if not value or len(value) < MIN_PII_LEN:

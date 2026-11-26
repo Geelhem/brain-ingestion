@@ -89,6 +89,67 @@ The config supports:
    - `cpd`, `admin`, `resource` → standard summaries
 5. **Index** — builds sqlite-vec index for semantic search
 
+## Durability and integrity
+
+The pipeline is meant to survive reboots, sleep/wake and crashes without manual
+restarts. Three pieces work together:
+
+**WAL state database.** `.ingest-state/manifest.db` uses `journal_mode=WAL`, so
+the anonymise writer can commit while integrity checks read the DB. Keep WAL
+and SHM files alongside the DB; do not copy the DB alone while the pipeline is
+running. Dated `.bak-*` files in `.ingest-state/` are pre-repair snapshots.
+
+**LaunchAgents.** `scripts/install_launchd.sh` installs and reloads the plists
+from `ops/launchd/` into `~/Library/LaunchAgents`:
+
+- `com.mfl.secondbrain.anonymise` — `KeepAlive`/`RunAtLoad` supervisor for
+  `scripts/anonymise_supervisor.py`. launchd relaunches it after a crash or
+  reboot; the supervisor in turn restarts the `anonymise` worker and reaps
+  orphaned writers left behind by a killed supervisor.
+- `com.mfl.secondbrain.integrity` — runs `scripts/integrity_guard.py` every
+  7200 s (`StartInterval`), at low I/O priority so it does not starve the writer.
+
+Install / re-install after a clone or a plist change:
+
+```bash
+scripts/install_launchd.sh
+launchctl list | grep mfl.secondbrain
+# verify self-heal: PID must change
+launchctl kickstart -k "gui/$(id -u)/com.mfl.secondbrain.anonymise"
+```
+
+**Integrity guard.** `scripts/integrity_guard.py` runs `PRAGMA quick_check`
+(`--full` uses `integrity_check`) against the state DB. On index-only corruption
+(it recognises `idx_files_status`, `idx_chunks_status`, `sqlite_autoindex`,
+"row missing from index", etc.) it runs a non-destructive `REINDEX` and
+re-checks. Unrecoverable corruption writes `logs/INTEGRITY-FAILURE.txt` and
+exits 2; the supervisor then skips anonymise writes and retries later instead
+of crash-looping. A busy/locked DB exits 3 and is retried. All outcomes are
+logged to `logs/integrity.log`.
+
+**Re-extracting discovered PDFs.** Use path order, not size order — size-first
+pickup hits 0-byte/HTML/JSON junk left by OneDrive placeholders:
+
+```bash
+.venv/bin/python -m mfl_brain crawl --no-walk --order path --ext pdf --limit 20
+```
+
+Record `discovered`/`extracted`/`extraction_failed` counts before and after each
+bounded batch (the state DB is the source of truth; see `logs/gs568_reextract.log`).
+
+Set `TMPDIR` to a stable directory when running OCR batches. Paperclip run
+scratch dirs are deleted when a heartbeat ends, and tesseract keeps intermediate
+PPM files there, so an ephemeral `TMPDIR` makes OCR fail with
+"image file not found" and silently moves files to `extraction_failed`:
+
+```bash
+TMPDIR=/private/tmp .venv/bin/python -m mfl_brain crawl --no-walk --order path --ext pdf --limit 2
+```
+
+Scanned PDFs from the external volume are OCR-bound (roughly 3 min/file with
+four languages), so run small batches; draining all remaining `discovered`
+files is a long-running job, not a single heartbeat.
+
 ## Architecture
 
 ```

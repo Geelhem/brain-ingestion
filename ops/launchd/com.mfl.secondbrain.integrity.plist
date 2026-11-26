@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mfl.secondbrain.integrity</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/python3.12</string>
+    <string>/Users/Gee/ai_lab/mfl_second_brain/scripts/integrity_guard.py</string>
+    <string>--config</string>
+    <string>/Users/Gee/ai_lab/mfl_second_brain/ingest.config.yaml</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/Gee/ai_lab/mfl_second_brain</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- quick_check scans every index on a ~4 GB DB, so keep it infrequent and
+       low priority to avoid starving the anonymise writer. -->
+  <key>StartInterval</key>
+  <integer>7200</integer>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/Gee/ai_lab/mfl_second_brain/logs/launchd-integrity.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/Gee/ai_lab/mfl_second_brain/logs/launchd-integrity.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
