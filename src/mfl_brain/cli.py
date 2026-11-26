@@ -247,12 +247,14 @@ def cmd_anonymise(args) -> int:
     # DB (no per-chunk connection / PRAGMA / schema / migration setup); the
     # snapshot is refreshed at batch boundaries once new PII is durable.
     known = MappingProxyType(dict(manifest.known_pii()))
+    known_pattern = build_known_pattern(known)
 
     def _process_chunk(r):
         """Process one chunk using the shared snapshot; returns a result tuple."""
         try:
             text, tier, _replaced, pii_entries = anonymise_chunk(
-                r["text"], known=known, cfg_anonymiser=cfg.anonymiser
+                r["text"], known=known, known_pattern=known_pattern,
+                cfg_anonymiser=cfg.anonymiser
             )
             return (r["chunk_id"], r["file_path"], text, tier, pii_entries, None)
         except RuntimeError as exc:
@@ -296,6 +298,7 @@ def cmd_anonymise(args) -> int:
         manifest.conn.commit()
         # Refresh the read-only snapshot now that new mappings are durable.
         known = MappingProxyType(dict(manifest.known_pii()))
+        known_pattern = build_known_pattern(known)
 
         if not args.quiet and total_done % 50 == 0:
             # NOTE: do not call write_status() here. render_status() runs
@@ -458,7 +461,7 @@ def cmd_incremental(args) -> int:
     cfg, manifest = _cfg_and_manifest(args)
     from .crawler import crawl
     from .dedup import mark_exact_duplicates, mark_near_duplicates, skip_noncanonical
-    from .anonymise import anonymise_chunk
+from .anonymise import anonymise_chunk, build_known_pattern
     from .indexvec import build_index
     from .monitor import write_status
     

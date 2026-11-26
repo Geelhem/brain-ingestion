@@ -294,7 +294,7 @@ sources: []
 
     seen = []
 
-    def _fake(text, manifest=None, cfg_anonymiser=None, *, known=None):
+    def _fake(text, manifest=None, cfg_anonymiser=None, *, known=None, known_pattern=None):
         seen.append((text, dict(known or {})))
         return (text, "prefilter-clean", 0, [])
 

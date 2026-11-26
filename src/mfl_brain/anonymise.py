@@ -424,12 +424,40 @@ def _apply(text: str, items: list[dict[str, str]], known: dict[str, tuple[str, s
     return text, replaced, pii_entries
 
 
+def build_known_pattern(known):
+    """Compile all known PII values into ONE regex for fast prepass.
+
+    The old prepass ran re.sub() once per known value (22k+ calls per chunk).
+    A single alternation with a replacement callback does one scan instead.
+    Returns (compiled_pattern, value_to_placeholder_map) or (None, {}).
+    """
+    import re
+
+    values = []
+    for real, (ph, _kind) in known.items():
+        if len(real) < MIN_PII_LEN or len(real) > MAX_PII_LEN:
+            continue
+        if "[[" in real:
+            continue
+        values.append((real, ph))
+    if not values:
+        return None, {}
+    # Longest first so overlapping values prefer the more specific match.
+    values.sort(key=lambda pair: len(pair[0]), reverse=True)
+    mapping = dict(values)
+    pattern = re.compile(
+        r"(?<!\w)(?:" + "|".join(re.escape(v) for v, _ in values) + r")(?!\w)"
+    )
+    return pattern, mapping
+
+
 def anonymise_chunk(
     chunk_text: str,
     manifest=None,
     cfg_anonymiser: dict | None = None,
     *,
     known: dict[str, tuple[str, str]] | None = None,
+    known_pattern=None,
 ) -> tuple[str, str, int, list[tuple[str, str, str]]]:
     """Anonymise one chunk: (text, tier, replacements, pii_entries).
 
@@ -443,12 +471,11 @@ def anonymise_chunk(
     cfg_anonymiser = cfg_anonymiser or {}
 
     text = chunk_text
-    for real, (ph, _k) in known.items():
-        if len(real) < MIN_PII_LEN or len(real) > MAX_PII_LEN:
-            continue
-        if "[[" in real or real not in text:
-            continue
-        text = re.sub(r"(?<!\w)" + re.escape(real) + r"(?!\w)", ph, text)
+    if known_pattern is None:
+        known_pattern = build_known_pattern(known)
+    pattern, mapping = known_pattern
+    if pattern is not None:
+        text = pattern.sub(lambda m: mapping.get(m.group(0), m.group(0)), text)
 
     # Detect German-heavy chunks: German capitalises ALL nouns, so two-word
     # capitalized phrases there are overwhelmingly noun phrases, not names.
