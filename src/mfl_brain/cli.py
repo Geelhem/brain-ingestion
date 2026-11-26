@@ -25,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-from .anonymise import anonymise_chunk
+from .anonymise import anonymise_chunk, build_known_pattern
 from .atomic_splitter import batch_process_obsidian_folder
 from .config import DEFAULT_CONFIG, load_config
 from .crawler import crawl
@@ -461,7 +461,7 @@ def cmd_incremental(args) -> int:
     cfg, manifest = _cfg_and_manifest(args)
     from .crawler import crawl
     from .dedup import mark_exact_duplicates, mark_near_duplicates, skip_noncanonical
-from .anonymise import anonymise_chunk, build_known_pattern
+    from .anonymise import anonymise_chunk, build_known_pattern
     from .indexvec import build_index
     from .monitor import write_status
     
